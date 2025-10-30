@@ -170,28 +170,53 @@ app.layout = html.Div([
 ])
 
 # ---------- FAST CALLBACK ----------
-@callback(
+@app.callback(
     Output("table", "data"),
     Output("status", "children"),
     Input("fast-interval", "n_intervals"),
     State("table", "data")
 )
-def update_fast(_, current_data):
+def update_fast(n_intervals, current_data):
+    if current_data is None:
+        current_data = []
+
     now = datetime.now().strftime("%H:%M:%S")
-    live = len(market_state)
-    status = f"Live: {live} | {now}"
+    live_count = len(market_state)
+    status = f"Live: {live_count} contracts | Updated: {now}"
 
-    # Only update if new data
-    if not last_update:
-        return current_data, status
+    # Build full data only on first load
+    if not current_data:
+        print(f"[{datetime.now()}] [DASH] Initial full load...")
+        full_data = []
+        for sym in underlyings:
+            row = get_row(sym)
+            row["_ts"] = time.time()
+            full_data.append(row)
+        return full_data, status
 
-    # Build patch
-    patch = []
+    # Incremental patch
+    patch = {}
     changed = False
-    for sym in underlyings:
-        row = get_row(sym)
-        if row["_ts"] > (current_data[underlyings.index(sym)]["_ts"] if current_data else 0):
-            patch.append(row)
+    for i, sym in enumerate(underlyings):
+        new_row = get_row(sym)
+        new_row["_ts"] = time.time()
+
+        if not current_data or i >= len(current_data):
+            patch[i] = new_row
+            changed = True
+            continue
+
+        old_row = current_data[i]
+        # Compare only key fields
+        if (new_row["Near"] != old_row.get("Near") or
+            new_row["Next"] != old_row.get("Next") or
+            new_row["Far"] != old_row.get("Far") or
+            new_row.get("N→X") != old_row.get("N→X")):
+            patch[i] = new_row
             changed = True
 
-    return patch or dash.no_update, status
+    if changed:
+        print(f"[{datetime.now()}] [DASH] Patching {len(patch)} rows")
+        return patch, status
+    else:
+        return dash.no_update, status
