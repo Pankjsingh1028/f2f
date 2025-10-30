@@ -27,7 +27,9 @@ REFRESH_INTERVAL = 2500  # ms
 MARKET_QUOTE_URL = 'https://api.upstox.com/v2/market-quote/quotes'
 
 market_state = {}
-market_state_lock = threading.Lock()
+#market_state_lock = threading.Lock()
+import eventlet
+market_state_lock = eventlet.semaphore.Semaphore()
 
 # ---------- HELPERS ----------
 def safe_float(x):
@@ -46,6 +48,7 @@ def load_instruments():
     except FileNotFoundError:
         print(f"Error: {INSTRUMENTS_JSON} not found.")
         return []
+
 
 def load_underlyings():
     try:
@@ -117,6 +120,8 @@ def on_message(message):
         with market_state_lock:
             market_state[ik] = {"bidP": bid, "askP": ask, "ltp": ltp}
 
+#    print(f"[WS] Updated {len(feeds)} feeds | total tracked: {len(market_state)}", flush=True) 
+
 def on_open():
     print(f"[{datetime.now()}] SDK WebSocket connected")
 
@@ -139,7 +144,7 @@ def start_sdk_streamer(subscribe_keys):
         streamer.auto_reconnect(True, 5, 5)
         streamer.connect()
         while True:
-            time.sleep(1)
+            time.sleep(0.5)
     t = threading.Thread(target=_run, daemon=True)
     t.start()
 
@@ -224,8 +229,8 @@ for s in underlyings:
         subscribe_keys.append(f["instrument_key"])
 subscribe_keys = list(dict.fromkeys(subscribe_keys))
 
-initial_rest_poll(subscribe_keys)
-start_sdk_streamer(subscribe_keys)
+#initial_rest_poll(subscribe_keys)
+#start_sdk_streamer(subscribe_keys)
 
 # ---------- DASHBOARD LAYOUT ----------
 app.layout = html.Div([
@@ -286,21 +291,36 @@ app.layout = html.Div([
     )
 ])
 
-from functools import lru_cache
 
-@lru_cache(maxsize=1)
-def cached_df():
-    return build_df(underlyings, instrument_data_list, margin_df)
 
 @app.callback(
     [Output("table", "data"), Output("last_update", "children")],
     Input("interval", "n_intervals")
 )
 def update_table(_):
-    df = cached_df()
+    print("[CALLBACK] Triggered", flush=True)
+    try:
+        df = build_df(underlyings, instrument_data_list, margin_df).fillna("")
+        print(f"[CALLBACK] Data built with {len(df)} rows", flush=True)
+    except Exception as e:
+        print(f"[CALLBACK] Error: {e}", flush=True)
+        return [], f"Error: {e}"
     now = datetime.now().strftime("%H:%M:%S")
-    cached_df.cache_clear()  # rebuild for next interval
+    cached_df.cache_clear()
     return df.to_dict("records"), f"Last updated: {now}"
 
+#server = app.server
+
+#if __name__ == "__main__":
+#    app.run(host="0.0.0.0", port=8051, debug=False)
+
+# At the bottom of your file, replace the if __name__ block:
+
 if __name__ == "__main__":
+    # Start WebSocket and polling ONLY in the main process
+    print(f"[{datetime.now()}] Starting WebSocket and initial poll...")
+    initial_rest_poll(subscribe_keys)
+    start_sdk_streamer(subscribe_keys)
+
     app.run(host="0.0.0.0", port=8051, debug=False)
+
