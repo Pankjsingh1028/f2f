@@ -10,7 +10,8 @@ from collections import defaultdict
 
 import dash
 from dash import dcc, html, dash_table, ctx, callback, Output, Input, State, ALL
-from dash.exceptions import PreventUpdate, dash
+from dash.exceptions import PreventUpdate
+import dash
 
 import upstox_client
 import eventlet
