@@ -1,4 +1,5 @@
-# f2fspread_main.py
+# f2fspread_main.py — fixed and optimized
+
 import os
 import json
 import time
@@ -7,14 +8,14 @@ import requests
 from datetime import datetime
 from dotenv import load_dotenv
 from collections import defaultdict
+import threading
+import eventlet
 
 import dash
-from dash import dcc, html, dash_table, ctx, callback, Output, Input, State, ALL
+from dash import dcc, html, dash_table, ctx, callback, Output, Input, State
 from dash.exceptions import PreventUpdate
-import dash
 
 import upstox_client
-import eventlet
 
 # ---------- CONFIG ----------
 load_dotenv()
@@ -25,10 +26,10 @@ if not ACCESS_TOKEN:
 INSTRUMENTS_JSON = "instruments.json"
 STOCKS_CSV = "futurestockslist.csv"
 MARGIN_CSV = "margin_charges_cache.csv"
-REFRESH_INTERVAL = 300  # 300ms
-MARKET_QUOTE_URL = 'https://api.upstox.com/v2/market-quote/quotes'
+REFRESH_INTERVAL = 300  # ms
+MARKET_QUOTE_URL = "https://api.upstox.com/v2/market-quote/quotes"
 
-# Global state
+# ---------- GLOBAL STATE ----------
 market_state = {}
 market_state_lock = eventlet.semaphore.Semaphore()
 last_update = {}
@@ -38,7 +39,7 @@ symbol_to_keys = {}
 def safe_float(x):
     try:
         return float(x)
-    except:
+    except Exception:
         return None
 
 def diff(a, b):
@@ -67,7 +68,7 @@ def load_static():
 
 margin_df, underlyings = load_static()
 
-# ---------- REST POLLING ----------
+# ---------- INITIAL REST POLL ----------
 def initial_rest_poll(subscribe_keys):
     print(f"[{datetime.now()}] [POLL] Initial poll: {len(subscribe_keys)} keys")
     batch_size = 490
@@ -81,14 +82,13 @@ def initial_rest_poll(subscribe_keys):
                 data = resp.json().get("data", {})
                 with market_state_lock:
                     for ik_long, quote in data.items():
-                        ik = str(quote.get("instrument_token") or ik_long)
                         depth = quote.get("depth", {})
                         buy = depth.get("buy", [])
                         sell = depth.get("sell", [])
                         bid = safe_float(buy[0].get("price")) if buy else None
                         ask = safe_float(sell[0].get("price")) if sell else None
                         ltp = safe_float(quote.get("last_price"))
-                        market_state[ik] = {"bidP": bid, "askP": ask, "ltp": ltp}
+                        market_state[str(ik_long)] = {"bidP": bid, "askP": ask, "ltp": ltp}
                 print(f"  [POLL] Batch {i//batch_size + 1} OK")
             else:
                 print(f"  [POLL] HTTP {resp.status_code}")
@@ -97,7 +97,7 @@ def initial_rest_poll(subscribe_keys):
         time.sleep(0.1)
     print(f"[{datetime.now()}] [POLL] Complete. {len(market_state)} cached.")
 
-# ---------- WEBSOCKET ----------
+# ---------- WEBSOCKET CALLBACKS ----------
 def on_message(message):
     if message.get("type") != "live_feed":
         return
@@ -107,15 +107,14 @@ def on_message(message):
     print(f"[{datetime.now()}] [WS] {len(feeds)} updates")
     with market_state_lock:
         for ik_raw, payload in feeds.items():
-            ik = str(ik_raw)
             ff = payload.get("fullFeed", {}).get("marketFF", {})
             ltpc = ff.get("ltpc", {})
             ltp = safe_float(ltpc.get("ltp"))
             depth = ff.get("marketLevel", {}).get("bidAskQuote", [])
             bid = safe_float(depth[0].get("bidP")) if depth else None
             ask = safe_float(depth[0].get("askP")) if depth else None
-            market_state[ik] = {"bidP": bid, "askP": ask, "ltp": ltp}
-            last_update[ik] = time.time()
+            market_state[str(ik_raw)] = {"bidP": bid, "askP": ask, "ltp": ltp}
+            last_update[str(ik_raw)] = time.time()
 
 def on_open():
     print(f"[{datetime.now()}] [WS] Connected")
@@ -126,14 +125,14 @@ def on_error(error):
 def on_reconnecting():
     print(f"[{datetime.now()}] [WS] Reconnecting...")
 
+# ---------- STREAMER STARTUP ----------
 def start_streamer():
     subscribe_keys = [k for sym in underlyings for k in symbol_to_keys[sym] if k]
     print(f"[{datetime.now()}] [WS] Subscribing to {len(subscribe_keys)} contracts")
 
-    # Initial poll
+    # Initial REST fill
     initial_rest_poll(subscribe_keys)
 
-    # Start WebSocket
     def _run():
         config = upstox_client.Configuration()
         config.access_token = ACCESS_TOKEN
@@ -149,19 +148,18 @@ def start_streamer():
         while True:
             eventlet.sleep(1)
 
-    import threading
     t = threading.Thread(target=_run, daemon=True)
     t.start()
 
-# ---------- FAST BUILD ----------
+# ---------- BUILD TABLE ROW ----------
 def get_row(sym):
     near_k, nxt_k, far_k = symbol_to_keys[sym]
     near = market_state.get(near_k, {}) if near_k else {}
     nxt = market_state.get(nxt_k, {}) if nxt_k else {}
-    far = market_state.get(far_k, {}) if Far_k else {}
+    far = market_state.get(far_k, {}) if far_k else {}
 
     near_ltp = safe_float(near.get("ltp")) or 1
-    def pct(d): return round(d / near_ltp * 100, 2) if d is not None else None
+    pct = lambda d: round(d / near_ltp * 100, 2) if d is not None else None
 
     spreads = {
         "N→X": diff(nxt.get("bidP"), near.get("askP")),
@@ -186,7 +184,7 @@ def get_row(sym):
         "Far": far.get("ltp"),
         **spreads,
         **pct_spreads,
-        "_ts": time.time()
+        "_ts": time.time(),
     }
 
 # ---------- DASH APP ----------
@@ -201,25 +199,25 @@ app.layout = html.Div([
         id="table",
         columns=[
             {"name": "Sym", "id": "Symbol"},
-            {"name": "Lot", "id": "Lot", "type": "numeric"},
-            {"name": "Mrg", "id": "Margin", "type": "numeric"},
-            {"name": "Chg", "id": "Charges", "type": "numeric"},
-            {"name": "Cry", "id": "Carry", "type": "numeric"},
+            {"name": "Lot", "id": "Lot"},
+            {"name": "Mrg", "id": "Margin"},
+            {"name": "Chg", "id": "Charges"},
+            {"name": "Cry", "id": "Carry"},
             {"name": "N", "id": "Near"},
             {"name": "X", "id": "Next"},
             {"name": "F", "id": "Far"},
-            {"name": "N→X", "id": "N→X", "type": "numeric"},
-            {"name": "%", "id": "N→X%", "type": "numeric"},
-            {"name": "X→N", "id": "X→N", "type": "numeric"},
-            {"name": "%", "id": "X→N%", "type": "numeric"},
-            {"name": "X→F", "id": "X→F", "type": "numeric"},
-            {"name": "%", "id": "X→F%", "type": "numeric"},
-            {"name": "F→X", "id": "F→X", "type": "numeric"},
-            {"name": "%", "id": "F→X%", "type": "numeric"},
-            {"name": "N→F", "id": "N→F", "type": "numeric"},
-            {"name": "%", "id": "N→F%", "type": "numeric"},
-            {"name": "F→N", "id": "F→N", "type": "numeric"},
-            {"name": "%", "id": "F→N%", "type": "numeric"},
+            {"name": "N→X", "id": "N→X"},
+            {"name": "N→X%", "id": "N→X%"},
+            {"name": "X→N", "id": "X→N"},
+            {"name": "X→N%", "id": "X→N%"},
+            {"name": "X→F", "id": "X→F"},
+            {"name": "X→F%", "id": "X→F%"},
+            {"name": "F→X", "id": "F→X"},
+            {"name": "F→X%", "id": "F→X%"},
+            {"name": "N→F", "id": "N→F"},
+            {"name": "N→F%", "id": "N→F%"},
+            {"name": "F→N", "id": "F→N"},
+            {"name": "F→N%", "id": "F→N%"},
         ],
         data=[],
         page_size=100,
@@ -235,16 +233,16 @@ app.layout = html.Div([
         ] + [
             {"if": {"filter_query": f"{{{k}}} < 0"}, "backgroundColor": "#5a0a0a", "color": "white"}
             for k in ["X→N", "F→X", "F→N"]
-        ]
+        ],
     )
 ])
 
-# ---------- FAST CALLBACK ----------
+# ---------- CALLBACK ----------
 @app.callback(
     Output("table", "data"),
     Output("status", "children"),
     Input("fast-interval", "n_intervals"),
-    State("table", "data")
+    State("table", "data"),
 )
 def update_fast(n_intervals, current_data):
     if current_data is None:
@@ -254,13 +252,13 @@ def update_fast(n_intervals, current_data):
     live_count = len(market_state)
     status = f"Live: {live_count} contracts | Updated: {now}"
 
-    # First load
+    # First full load
     if not current_data:
         print(f"[{datetime.now()}] [DASH] Initial load")
         full_data = [get_row(sym) for sym in underlyings]
         return full_data, status
 
-    # Patch
+    # Partial patch
     patch = {}
     for i, sym in enumerate(underlyings):
         new_row = get_row(sym)
@@ -268,13 +266,22 @@ def update_fast(n_intervals, current_data):
             patch[i] = new_row
             continue
         old_row = current_data[i]
-        if (new_row["Near"] != old_row.get("Near") or
-            new_row["Next"] != old_row.get("Next") or
-            new_row["Far"] != old_row.get("Far") or
-            new_row.get("N→X") != old_row.get("N→X")):
+        if (
+            new_row["Near"] != old_row.get("Near")
+            or new_row["Next"] != old_row.get("Next")
+            or new_row["Far"] != old_row.get("Far")
+            or new_row.get("N→X") != old_row.get("N→X")
+        ):
             patch[i] = new_row
 
     if patch:
-        print(f"[{datetime.now()}] [DASH] Patching {len(patch)} rows")
-        return patch, status
+        print(f"[{datetime.now()}] [DASH] Updating {len(patch)} rows")
+        updated_data = current_data.copy()
+        for i, row in patch.items():
+            if i < len(updated_data):
+                updated_data[i] = row
+            else:
+                updated_data.append(row)
+        return updated_data, status
+
     return dash.no_update, status
