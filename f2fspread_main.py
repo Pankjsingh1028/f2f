@@ -158,7 +158,7 @@ def get_row(sym):
     near_k, nxt_k, far_k = symbol_to_keys[sym]
     near = market_state.get(near_k, {}) if near_k else {}
     nxt = market_state.get(nxt_k, {}) if nxt_k else {}
-    far = market_state.get(far_k, {}) if Farley_k else {}
+    far = market_state.get(far_k, {}) if Far_k else {}
 
     near_ltp = safe_float(near.get("ltp")) or 1
     def pct(d): return round(d / near_ltp * 100, 2) if d is not None else None
