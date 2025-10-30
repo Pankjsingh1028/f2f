@@ -45,7 +45,7 @@ def load_instruments():
         with open(INSTRUMENTS_JSON, "r") as f:
             return json.load(f)
     except FileNotFoundError:
-        print(f"Error: {INSTRUMENTS_JSON} not found.")
+        print(f"[{datetime.now()}] ERROR: {INSTRUMENTS_JSON} not found.")
         return []
 
 def load_underlyings():
@@ -53,7 +53,7 @@ def load_underlyings():
         df = pd.read_csv(STOCKS_CSV)
         return df["underlying_symbol"].dropna().unique().tolist()
     except FileNotFoundError:
-        print(f"Error: {STOCKS_CSV} not found.")
+        print(f"[{datetime.now()}] ERROR: {STOCKS_CSV} not found.")
         return []
 
 def get_instrument_keys_for_symbol(symbol, instruments):
@@ -65,7 +65,7 @@ def get_instrument_keys_for_symbol(symbol, instruments):
             and instrument.get("underlying_symbol") == symbol
         ):
             futures.append({
-                "instrument_key": instrument.get("instrument_key"),
+                "instrument_key": str(instrument.get("instrument_key")),  # str() for consistency
                 "expiry": instrument.get("expiry", 0),
                 "trading_symbol": instrument.get("trading_symbol")
             })
@@ -74,7 +74,7 @@ def get_instrument_keys_for_symbol(symbol, instruments):
 
 # ---------- REST POLLING ----------
 def initial_rest_poll(subscribe_keys):
-    print(f"[{datetime.now()}] Initial REST poll: {len(subscribe_keys)} instruments")
+    print(f"[{datetime.now()}] [POLL] Starting initial REST poll for {len(subscribe_keys)} keys...")
     batch_size = 490
     for i in range(0, len(subscribe_keys), batch_size):
         keys_batch = subscribe_keys[i:i + batch_size]
@@ -86,29 +86,33 @@ def initial_rest_poll(subscribe_keys):
                 data = resp.json().get("data", {})
                 with market_state_lock:
                     for ik_long, quote in data.items():
+                        ik = str(quote.get("instrument_token") or ik_long)  # str()
                         depth = quote.get("depth", {})
                         buy_depth = depth.get("buy", [])
                         sell_depth = depth.get("sell", [])
                         bid = safe_float(buy_depth[0].get("price")) if buy_depth else None
                         ask = safe_float(sell_depth[0].get("price")) if sell_depth else None
                         ltp = safe_float(quote.get("last_price"))
-                        ik = quote.get("instrument_token") or ik_long
                         market_state[ik] = {"bidP": bid, "askP": ask, "ltp": ltp}
-                print(f"  Batch {i//batch_size + 1} OK")
+                print(f"  [POLL] Batch {i//batch_size + 1} OK ({len(keys_batch)})")
             else:
-                print(f"[Poll] HTTP {resp.status_code}")
+                print(f"  [POLL] HTTP {resp.status_code}: {resp.text[:100]}")
         except Exception as e:
-            print(f"[Poll] Error: {e}")
+            print(f"  [POLL] Error: {e}")
         time.sleep(0.1)
-    print(f"[{datetime.now()}] Initial poll complete.")
+    print(f"[{datetime.now()}] [POLL] Initial poll complete. {len(market_state)} instruments cached.")
 
 # ---------- WEBSOCKET ----------
 def on_message(message):
     if message.get("type") != "live_feed":
         return
     feeds = message.get("feeds", {})
+    if not feeds:
+        return
+    print(f"[{datetime.now()}] [WS] Received {len(feeds)} updates")
     with market_state_lock:
-        for ik, payload in feeds.items():
+        for ik_raw, payload in feeds.items():
+            ik = str(ik_raw)  # Critical: str()
             ff = payload.get("fullFeed", {}).get("marketFF", {})
             ltpc = ff.get("ltpc", {})
             ltp = safe_float(ltpc.get("ltp"))
@@ -118,13 +122,13 @@ def on_message(message):
             market_state[ik] = {"bidP": bid, "askP": ask, "ltp": ltp}
 
 def on_open():
-    print(f"[{datetime.now()}] WebSocket connected")
+    print(f"[{datetime.now()}] [WS] Connected")
 
 def on_error(error):
-    print(f"[{datetime.now()}] WebSocket error: {error}")
+    print(f"[{datetime.now()}] [WS] ERROR: {error}")
 
 def on_reconnecting():
-    print(f"[{datetime.now()}] WebSocket reconnecting...")
+    print(f"[{datetime.now()}] [WS] Reconnecting...")
 
 def start_sdk_streamer(subscribe_keys):
     def _run():
@@ -138,6 +142,7 @@ def start_sdk_streamer(subscribe_keys):
         streamer.on("reconnecting", on_reconnecting)
         streamer.auto_reconnect(True, 5, 5)
         streamer.connect()
+        print(f"[{datetime.now()}] [WS] Streamer started")
         while True:
             eventlet.sleep(1)
     import threading
@@ -162,10 +167,12 @@ def compute_spreads(near, nxt, far):
     return {**spreads, **pct_spreads}
 
 def get_state(ik):
+    ik = str(ik)  # Critical: str()
     with market_state_lock:
         return market_state.get(ik, {"ltp": None, "bidP": None, "askP": None})
 
 def build_df(underlyings, instruments, margin_df):
+    print(f"[{datetime.now()}] [BUILD] underlyings={len(underlyings)}, state={len(market_state)}")
     rows = []
     for sym in underlyings:
         futs = get_instrument_keys_for_symbol(sym, instruments)[:3]
@@ -203,50 +210,52 @@ def build_df(underlyings, instruments, margin_df):
 app = dash.Dash(__name__)
 app.title = "Futures Spread Dashboard"
 
-# Load static data
-print(f"[{datetime.now()}] Loading static data...")
-margin_df = pd.read_csv(MARGIN_CSV)
-instrument_data_list = load_instruments()
-underlyings = load_underlyings()
-
-subscribe_keys = list({
-    f["instrument_key"]
-    for s in underlyings
-    for f in get_instrument_keys_for_symbol(s, instrument_data_list)
-})
+# Load static data at import time
+print(f"[{datetime.now()}] [INIT] Loading static files...")
+try:
+    margin_df = pd.read_csv(MARGIN_CSV)
+    instrument_data_list = load_instruments()
+    underlyings = load_underlyings()
+    print(f"[{datetime.now()}] [INIT] Loaded: {len(underlyings)} symbols, {len(instrument_data_list)} instruments")
+except Exception as e:
+    print(f"[{datetime.now()}] [INIT] FAILED TO LOAD DATA: {e}")
+    margin_df = pd.DataFrame()
+    instrument_data_list = []
+    underlyings = []
 
 # Layout
 app.layout = html.Div([
     html.H3("Live Futures Spread Dashboard"),
-    html.Div(f"Tracking {len(underlyings)} symbols | {len(subscribe_keys)} contracts"),
+    html.Div(id="status", style={"margin": "10px 0", "fontWeight": "bold"}),
     html.Div(id="last_update", style={"margin": "10px 0", "fontWeight": "bold"}),
     dcc.Interval(id="interval", interval=REFRESH_INTERVAL, n_intervals=0),
     dash_table.DataTable(
         id="table",
         columns=[
             {"name": "Symbol", "id": "Symbol"},
-            {"name": "Lot_Size", "id": "Lot_Size", "type": "numeric"},
+            {"name": "Lot", "id": "Lot_Size", "type": "numeric"},
             {"name": "Margin", "id": "Margin", "type": "numeric"},
             {"name": "Charges", "id": "Charges", "type": "numeric"},
-            {"name": "Interest", "id": "Cost_of_Carry", "type": "numeric"},
-            {"name": "Near LTP", "id": "Near_ltp"},
-            {"name": "Next LTP", "id": "Next_ltp"},
-            {"name": "Far LTP", "id": "Far_ltp"},
-            {"name": "Near→Next", "id": "Spread_NearBuy_NextSell", "type": "numeric"},
+            {"name": "Carry", "id": "Cost_of_Carry", "type": "numeric"},
+            {"name": "Near", "id": "Near_ltp"},
+            {"name": "Next", "id": "Next_ltp"},
+            {"name": "Far", "id": "Far_ltp"},
+            {"name": "N→X", "id": "Spread_NearBuy_NextSell", "type": "numeric"},
             {"name": "%", "id": "Spread_NearBuy_NextSell_pct", "type": "numeric"},
-            {"name": "Next→Near", "id": "Spread_NearSell_NextBuy", "type": "numeric"},
+            {"name": "X→N", "id": "Spread_NearSell_NextBuy", "type": "numeric"},
             {"name": "%", "id": "Spread_NearSell_NextBuy_pct", "type": "numeric"},
-            {"name": "Next→Far", "id": "Spread_NextBuy_FarSell", "type": "numeric"},
+            {"name": "X→F", "id": "Spread_NextBuy_FarSell", "type": "numeric"},
             {"name": "%", "id": "Spread_NextBuy_FarSell_pct", "type": "numeric"},
-            {"name": "Far→Next", "id": "Spread_NextSell_FarBuy", "type": "numeric"},
+            {"name": "F→X", "id": "Spread_NextSell_FarBuy", "type": "numeric"},
             {"name": "%", "id": "Spread_NextSell_FarBuy_pct", "type": "numeric"},
-            {"name": "Near→Far", "id": "Spread_NearBuy_FarSell", "type": "numeric"},
+            {"name": "N→F", "id": "Spread_NearBuy_FarSell", "type": "numeric"},
             {"name": "%", "id": "Spread_NearBuy_FarSell_pct", "type": "numeric"},
-            {"name": "Far→Near", "id": "Spread_NearSell_FarBuy", "type": "numeric"},
+            {"name": "F→N", "id": "Spread_NearSell_FarBuy", "type": "numeric"},
             {"name": "%", "id": "Spread_NearSell_FarBuy_pct", "type": "numeric"},
         ],
         sort_action="native",
         filter_action="native",
+        page_size=50,
         style_table={"overflowX": "auto"},
         style_cell={"textAlign": "center", "padding": "4px", "fontFamily": "monospace"},
         style_header={"backgroundColor": "#111", "color": "white", "fontWeight": "bold"},
@@ -261,22 +270,23 @@ app.layout = html.Div([
             for col in ["Spread_NearBuy_NextSell", "Spread_NextBuy_FarSell", "Spread_NearBuy_FarSell",
                         "Spread_NearSell_NextBuy", "Spread_NearSell_FarBuy", "Spread_NextSell_FarBuy"]
         ],
-        page_size=50
     )
 ])
 
 # ---------- CALLBACK ----------
 @app.callback(
-    [Output("table", "data"), Output("last_update", "children")],
+    [Output("table", "data"), Output("last_update", "children"), Output("status", "children")],
     Input("interval", "n_intervals")
 )
 def update_table(_):
-    print(f"[{datetime.now()}] [DASH] Updating table...")
+    print(f"[{datetime.now()}] [DASH] Callback triggered")
     try:
         df = build_df(underlyings, instrument_data_list, margin_df).fillna("")
-        print(f"[{datetime.now()}] [DASH] Table updated: {len(df)} rows")
+        print(f"[{datetime.now()}] [DASH] Table built: {len(df)} rows")
     except Exception as e:
         print(f"[{datetime.now()}] [DASH] ERROR: {e}")
-        return [], f"Error: {e}"
+        return [], f"Error: {e}", f"ERROR: {e}"
+    
     now = datetime.now().strftime("%H:%M:%S")
-    return df.to_dict("records"), f"Last updated: {now}"
+    status = f"Tracking {len(underlyings)} symbols | {len(market_state)} live"
+    return df.to_dict("records"), f"Updated: {now}", status
