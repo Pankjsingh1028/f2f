@@ -1,0 +1,7 @@
+dash
+pandas
+python-dotenv
+requests
+upstox-client
+gunicorn
+

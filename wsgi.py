@@ -1,12 +1,5 @@
-from f2fspread_main import app, start_streamer
-from datetime import datetime
-import threading
+from f2fspread_main import app
 
-def start_ws_once():
-    if not getattr(start_ws_once, "started", False):
-        print(f"[{datetime.now()}] Starting WebSocket thread...")
-        start_streamer()
-        start_ws_once.started = True
-
-start_ws_once()
+# Gunicorn looks for 'application'
 application = app.server
+
