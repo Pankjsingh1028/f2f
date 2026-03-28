@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>F2F Spread Terminal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg-primary: #0a0e17;
+  --bg-secondary: #111827;
+  --bg-tertiary: #1a2236;
+  --bg-elevated: #1e293b;
+  --bg-hover: #243044;
+  --border: #1e3a5f;
+  --border-subtle: #162032;
+  --text-primary: #e2e8f0;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --accent: #38bdf8;
+  --accent-dim: #0c4a6e;
+  --green-bg: #052e16;
+  --green-text: #4ade80;
+  --green-bright: #22c55e;
+  --red-bg: #2a0a0a;
+  --red-text: #f87171;
+  --red-bright: #ef4444;
+  --amber-text: #fbbf24;
+  --cyan-text: #22d3ee;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
+  --font-sans: 'DM Sans', -apple-system, sans-serif;
+  --frozen-width: 130px;
+  --row-height: 36px;
+  --header-height: 40px;
+}
+
+html, body { height: 100%; overflow: hidden; }
+
+body {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root { height: 100%; display: flex; flex-direction: column; }
+
+/* ── TOP BAR ── */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 20px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.topbar-brand {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--accent);
+  letter-spacing: -0.3px;
+  white-space: nowrap;
+}
+
+.topbar-stats {
+  display: flex;
+  gap: 20px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.topbar-stat span { color: var(--text-secondary); font-weight: 500; }
+
+.topbar-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--green-bright);
+  animation: pulse-dot 2s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4); }
+  50% { opacity: 0.7; box-shadow: 0 0 0 4px rgba(34, 197, 94, 0); }
+}
+
+.topbar-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+
+/* ── SEARCH ── */
+.search-wrap {
+  position: relative;
+  width: 220px;
+}
+
+.search-wrap svg {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.search-input {
+  width: 100%;
+  padding: 7px 12px 7px 32px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.search-input:focus { border-color: var(--accent); }
+.search-input::placeholder { color: var(--text-muted); }
+
+/* ── EXPORT BTN ── */
+.btn-export {
+  padding: 7px 14px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.btn-export:hover { background: var(--bg-hover); color: var(--text-primary); border-color: var(--border); }
+
+/* ── TABLE CONTAINER ── */
+.table-viewport {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}
+
+.table-scroll {
+  height: 100%;
+  overflow: auto;
+  padding-left: var(--frozen-width);
+}
+
+.table-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+.table-scroll::-webkit-scrollbar-track { background: var(--bg-primary); }
+.table-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+.table-scroll::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+.table-scroll::-webkit-scrollbar-corner { background: var(--bg-primary); }
+
+/* ── TABLE ── */
+table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: max-content;
+  min-width: 100%;
+}
+
+/* ── HEADER ── */
+thead { position: sticky; top: 0; z-index: 20; }
+
+thead th {
+  height: var(--header-height);
+  padding: 0 10px;
+  background: var(--bg-secondary);
+  border-bottom: 2px solid var(--border);
+  color: var(--text-muted);
+  font-weight: 500;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  position: relative;
+  transition: color 0.12s;
+}
+
+thead th:hover { color: var(--accent); }
+thead th.sorted { color: var(--accent); }
+thead th .sort-arrow { font-size: 9px; margin-left: 3px; opacity: 0.8; }
+
+/* Column group headers */
+thead tr.col-groups th {
+  height: 26px;
+  font-size: 9px;
+  letter-spacing: 1.2px;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-subtle);
+  cursor: default;
+}
+
+.col-group-info { background: var(--bg-secondary); }
+.col-group-ltp { background: rgba(56, 189, 248, 0.06); }
+.col-group-near-next { background: rgba(168, 85, 247, 0.06); }
+.col-group-next-far { background: rgba(251, 191, 36, 0.06); }
+.col-group-near-far { background: rgba(34, 211, 238, 0.06); }
+
+/* ── BODY ── */
+tbody tr {
+  height: var(--row-height);
+  transition: background 0.08s;
+}
+
+tbody tr:hover { background: var(--bg-hover) !important; }
+tbody tr:nth-child(even) { background: rgba(255,255,255,0.01); }
+
+td {
+  padding: 0 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  white-space: nowrap;
+  text-align: right;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+td.sym-cell {
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* ── FROZEN COLUMN ── */
+.frozen-col {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: var(--frozen-width);
+  z-index: 30;
+  background: var(--bg-primary);
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.frozen-col table { width: var(--frozen-width); }
+
+.frozen-col thead th {
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border);
+}
+
+.frozen-col tr.col-groups th {
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border);
+}
+
+.frozen-col td {
+  background: var(--bg-primary);
+  border-right: 1px solid var(--border);
+}
+
+.frozen-col tbody tr:nth-child(even) td { background: rgba(255,255,255,0.01); }
+.frozen-col tbody tr:hover td { background: var(--bg-hover); }
+
+/* ── SPREAD CELLS ── */
+td.spread-pos { color: var(--green-text); background: var(--green-bg); }
+td.spread-neg { color: var(--red-text); background: var(--red-bg); }
+td.pct-pos { color: var(--green-text); }
+td.pct-neg { color: var(--red-text); }
+td.ltp-cell { color: var(--amber-text); }
+
+/* ── BOTTOM BAR ── */
+.bottombar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 20px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-subtle);
+  font-size: 11px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.bottombar kbd {
+  display: inline-block;
+  padding: 1px 5px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-secondary);
+  margin: 0 2px;
+}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+
+const COLS = [
+  { key: "sym",  label: "Symbol",  group: "info",      frozen: true,  align: "left" },
+  { key: "lot",  label: "Lot",     group: "info" },
+  { key: "mgn",  label: "Margin",  group: "info" },
+  { key: "chg",  label: "Charges", group: "info" },
+  { key: "coc",  label: "Interest",group: "info" },
+  { key: "nLtp", label: "Near",    group: "ltp",       cellClass: "ltp-cell" },
+  { key: "xLtp", label: "Next",    group: "ltp",       cellClass: "ltp-cell" },
+  { key: "fLtp", label: "Far",     group: "ltp",       cellClass: "ltp-cell" },
+  { key: "sNX",  label: "N→X",     group: "near-next", spread: true },
+  { key: "sNXp", label: "%",       group: "near-next", pct: true },
+  { key: "sXN",  label: "X→N",     group: "near-next", spread: true },
+  { key: "sXNp", label: "%",       group: "near-next", pct: true },
+  { key: "sXF",  label: "X→F",     group: "next-far",  spread: true },
+  { key: "sXFp", label: "%",       group: "next-far",  pct: true },
+  { key: "sFX",  label: "F→X",     group: "next-far",  spread: true },
+  { key: "sFXp", label: "%",       group: "next-far",  pct: true },
+  { key: "sNF",  label: "N→F",     group: "near-far",  spread: true },
+  { key: "sNFp", label: "%",       group: "near-far",  pct: true },
+  { key: "sFN",  label: "F→N",     group: "near-far",  spread: true },
+  { key: "sFNp", label: "%",       group: "near-far",  pct: true },
+];
+
+const SCROLL_COLS = COLS.filter(c => !c.frozen);
+
+const GROUP_META = {
+  "info":      { label: "Info",      span: 4, cls: "col-group-info" },
+  "ltp":       { label: "Last price",span: 3, cls: "col-group-ltp" },
+  "near-next": { label: "Near ↔ Next", span: 4, cls: "col-group-near-next" },
+  "next-far":  { label: "Next ↔ Far",  span: 4, cls: "col-group-next-far" },
+  "near-far":  { label: "Near ↔ Far",  span: 4, cls: "col-group-near-far" },
+};
+
+function fmt(v) {
+  if (v == null || v === "") return "—";
+  const n = Number(v);
+  if (isNaN(n)) return v;
+  if (Math.abs(n) >= 1000) return n.toLocaleString("en-IN", { maximumFractionDigits: 2 });
+  return n.toFixed(2);
+}
+
+function cellClass(col, v) {
+  if (col.cellClass) return col.cellClass;
+  if (v == null || v === "") return "";
+  const n = Number(v);
+  if (isNaN(n)) return "";
+  if (col.spread) return n > 0 ? "spread-pos" : n < 0 ? "spread-neg" : "";
+  if (col.pct) return n > 0 ? "pct-pos" : n < 0 ? "pct-neg" : "";
+  return "";
+}
+
+function exportCSV(data) {
+  const headers = COLS.map(c => c.label).join(",");
+  const rows = data.map(r => COLS.map(c => r[c.key] ?? "").join(","));
+  const csv = [headers, ...rows].join("\n");
+  const blob = new Blob([csv], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `spreads_${new Date().toISOString().slice(0,19).replace(/[T:]/g,"-")}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function SearchIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+    </svg>
+  );
+}
+
+function App() {
+  const [data, setData] = React.useState([]);
+  const [meta, setMeta] = React.useState({ ts: "", live: 0 });
+  const [search, setSearch] = React.useState("");
+  const [sortKey, setSortKey] = React.useState(null);
+  const [sortDir, setSortDir] = React.useState(1);
+  const scrollRef = React.useRef(null);
+  const frozenBodyRef = React.useRef(null);
+
+  // Fetch data
+  React.useEffect(() => {
+    let active = true;
+    const poll = async () => {
+      try {
+        const res = await fetch("/api/spreads");
+        const j = await res.json();
+        if (active) {
+          setData(j.data || []);
+          setMeta({ ts: j.ts, live: j.live });
+        }
+      } catch (e) { console.error("Fetch error:", e); }
+    };
+    poll();
+    const id = setInterval(poll, 500);
+    return () => { active = false; clearInterval(id); };
+  }, []);
+
+  // Sync frozen column scroll
+  React.useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const handler = () => {
+      if (frozenBodyRef.current) {
+        frozenBodyRef.current.style.transform = `translateY(-${el.scrollTop}px)`;
+      }
+    };
+    el.addEventListener("scroll", handler, { passive: true });
+    return () => el.removeEventListener("scroll", handler);
+  }, []);
+
+  // Keyboard shortcut
+  React.useEffect(() => {
+    const handler = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") { e.preventDefault(); document.querySelector(".search-input")?.focus(); }
+      if ((e.metaKey || e.ctrlKey) && e.key === "e") { e.preventDefault(); exportCSV(filtered); }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [data, search, sortKey, sortDir]);
+
+  // Filter + sort
+  const filtered = React.useMemo(() => {
+    let d = data;
+    if (search) {
+      const q = search.toUpperCase();
+      d = d.filter(r => r.sym && r.sym.toUpperCase().includes(q));
+    }
+    if (sortKey) {
+      d = [...d].sort((a, b) => {
+        let av = a[sortKey], bv = b[sortKey];
+        if (av == null) return 1; if (bv == null) return -1;
+        if (typeof av === "string") return av.localeCompare(bv) * sortDir;
+        return (av - bv) * sortDir;
+      });
+    }
+    return d;
+  }, [data, search, sortKey, sortDir]);
+
+  const handleSort = (key) => {
+    if (sortKey === key) { setSortDir(d => d * -1); }
+    else { setSortKey(key); setSortDir(1); }
+  };
+
+  const sortArrow = (key) => {
+    if (sortKey !== key) return null;
+    return <span className="sort-arrow">{sortDir === 1 ? "▲" : "▼"}</span>;
+  };
+
+  // Build group header row (for scrollable area)
+  const scrollGroups = [];
+  let lastGroup = null;
+  for (const col of SCROLL_COLS) {
+    if (col.group !== lastGroup) {
+      scrollGroups.push({ ...GROUP_META[col.group], group: col.group, span: 0 });
+      lastGroup = col.group;
+    }
+    scrollGroups[scrollGroups.length - 1].span++;
+  }
+
+  return (
+    <>
+      {/* ── TOP BAR ── */}
+      <div className="topbar">
+        <div className="topbar-dot" />
+        <div className="topbar-brand">F2F Spread Terminal</div>
+        <div className="topbar-stats">
+          <div><span>{meta.live}</span> instruments</div>
+          <div><span>{filtered.length}</span> / {data.length} symbols</div>
+          <div>Updated <span>{meta.ts || "—"}</span></div>
+        </div>
+        <div className="topbar-right">
+          <div className="search-wrap">
+            <SearchIcon />
+            <input
+              className="search-input"
+              placeholder="Search symbol..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+            />
+          </div>
+          <button className="btn-export" onClick={() => exportCSV(filtered)}>
+            ↓ Export CSV
+          </button>
+        </div>
+      </div>
+
+      {/* ── TABLE ── */}
+      <div className="table-viewport">
+        {/* Frozen Symbol column */}
+        <div className="frozen-col">
+          <table>
+            <thead>
+              <tr className="col-groups"><th className="col-group-info">&nbsp;</th></tr>
+              <tr><th onClick={() => handleSort("sym")} className={sortKey === "sym" ? "sorted" : ""}>
+                Symbol{sortArrow("sym")}
+              </th></tr>
+            </thead>
+            <tbody ref={frozenBodyRef}>
+              {filtered.map((r, i) => (
+                <tr key={r.sym || i}><td className="sym-cell">{r.sym || "—"}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Scrollable area */}
+        <div className="table-scroll" ref={scrollRef}>
+          <table>
+            <thead>
+              <tr className="col-groups">
+                {scrollGroups.map((g, i) => (
+                  <th key={i} colSpan={g.span} className={g.cls}>{g.label}</th>
+                ))}
+              </tr>
+              <tr>
+                {SCROLL_COLS.map(col => (
+                  <th key={col.key} onClick={() => handleSort(col.key)} className={sortKey === col.key ? "sorted" : ""}>
+                    {col.label}{sortArrow(col.key)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((r, i) => (
+                <tr key={r.sym || i}>
+                  {SCROLL_COLS.map(col => (
+                    <td key={col.key} className={cellClass(col, r[col.key])} style={col.align ? {textAlign: col.align} : undefined}>
+                      {fmt(r[col.key])}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* ── BOTTOM BAR ── */}
+      <div className="bottombar">
+        <div>
+          <kbd>Ctrl</kbd>+<kbd>K</kbd> Search&ensp;
+          <kbd>Ctrl</kbd>+<kbd>E</kbd> Export&ensp;
+          Click headers to sort
+        </div>
+        <div>500ms refresh • {data.length} rows</div>
+      </div>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
