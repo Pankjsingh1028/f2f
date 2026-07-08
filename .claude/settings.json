@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -e ' *)",
+      "Bash(python f2fspread.py)",
+      "Bash(echo \"started pid $!\")",
+      "Read(//c/Users/ADMIN/AppData/Local/Temp/claude/c--Users-ADMIN-Documents-GitHub-f2f/5369548d-835c-4166-ac81-ea60072b4689/scratchpad/**)",
+      "Bash(python -c ' *)"
+    ]
+  }
+}

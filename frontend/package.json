@@ -1,0 +1,17 @@
+{
+  "name": "f2f-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Self-contained React frontend for the F2F Spread Terminal (bundled to ../static via esbuild).",
+  "scripts": {
+    "build": "esbuild src/app.jsx --bundle --minify --format=iife --target=es2018 --outfile=../static/app.js",
+    "watch": "esbuild src/app.jsx --bundle --format=iife --target=es2018 --outfile=../static/app.js --watch"
+  },
+  "dependencies": {
+    "react": "18.2.0",
+    "react-dom": "18.2.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0"
+  }
+}

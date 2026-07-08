@@ -5,18 +5,27 @@ Serves JSON at /api/spreads for React frontend.
 Serves React at / from ./static/index.html.
 
 Run:
-  1. python futurestockslist.py
-  2. python f2fprecalc_optimized.py
-  3. python f2fspread_final.py  →  http://localhost:8051
+  1. python fsl.py                       # → futurestockslist.csv
+  2. python f2fcalc.py                   # → margin_charges_cache.csv
+  3. cd frontend && npm run build        # → static/app.js (only after UI edits)
+  4. python f2fspread.py                 # → http://localhost:8081
 """
 
-import os, json, time, threading
+import os, sys, json, time, threading
 import pandas as pd
 import requests
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from flask import Flask, jsonify, send_from_directory
 import upstox_client
+
+# Force UTF-8 console output so non-ASCII prints (→, ─, …) don't crash on
+# Windows' default cp1252 stdout. Safe no-op on platforms already using UTF-8.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
 
 # ── CONFIG ──
 load_dotenv()
