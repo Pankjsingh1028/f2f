@@ -30,6 +30,7 @@ if not ACCESS_TOKEN:
 INSTRUMENTS_JSON = "instruments.json"
 STOCKS_CSV = "futurestockslist.csv"
 OUTPUT_CSV = "margin_charges_cache.csv"
+MARKET_QUOTE_LTP_URL = "https://api.upstox.com/v2/market-quote/ltp"
 
 MAX_WORKERS = 10          # parallel API callers
 RATE_LIMIT_DELAY = 0.05   # seconds between API calls within a worker
@@ -116,8 +117,17 @@ def fetch_margin(near_key, next_key, lot_size):
     return None
 
 
-def fetch_brokerage_total(instrument_key, qty, txn_type, price):
-    """Fetch brokerage charges for a single leg."""
+def fetch_charges_ex_brokerage(instrument_key, qty, txn_type, price):
+    """Fetch a single leg's charges as PURE ex-brokerage.
+
+    Removes Upstox brokerage AND the GST levied on that brokerage, leaving only
+    the statutory/exchange charges (STT, exchange txn, stamp duty, SEBI,
+    clearing) plus the GST on the exchange/SEBI fees.
+
+    GST = rate × (brokerage + transaction + sebi_turnover). We strip the
+    brokerage's proportional share of GST, derived from the response so the
+    effective rate is used rather than a hardcoded 18%.
+    """
     url = "https://api.upstox.com/v2/charges/brokerage"
     params = {
         "instrument_token": instrument_key,
@@ -131,25 +141,64 @@ def fetch_brokerage_total(instrument_key, qty, txn_type, price):
         if r.status_code == 200:
             j = r.json()
             if j.get("status") == "success":
-                return j["data"]["charges"].get("total")
+                charges = j["data"]["charges"]
+                total = safe_float(charges.get("total")) or 0
+                brokerage = safe_float(charges.get("brokerage")) or 0
+                gst = safe_float((charges.get("taxes") or {}).get("gst")) or 0
+                other = charges.get("otherTaxes") or charges.get("other_charges") or {}
+                transaction = safe_float(other.get("transaction")) or 0
+                sebi = safe_float(other.get("sebi_turnover")) or 0
+                gst_base = brokerage + transaction + sebi
+                gst_on_brokerage = gst * (brokerage / gst_base) if gst_base > 0 else 0
+                return round(total - brokerage - gst_on_brokerage, 2)
         elif r.status_code == 429:
             time.sleep(1)
-            return fetch_brokerage_total(instrument_key, qty, txn_type, price)
+            return fetch_charges_ex_brokerage(instrument_key, qty, txn_type, price)
     except Exception as e:
         print(f"  [Charges] Error: {e}")
     return None
 
 
-def fetch_spread_charges(near_key, next_key, lot_size):
-    """Fetch charges for both spread directions."""
+def fetch_all_ltps(keys):
+    """Batch-fetch last traded prices for all legs → {instrument_key: ltp}.
+
+    The value-based statutory charges (STT, exchange, stamp, GST) are a % of
+    turnover (price × qty), so the brokerage endpoint needs a real price to
+    return them. We fetch every leg's LTP once here instead of per-symbol.
+    """
+    ltp_map = {}
+    batch_size = 490
+    for i in range(0, len(keys), batch_size):
+        batch = keys[i:i + batch_size]
+        url = f"{MARKET_QUOTE_LTP_URL}?instrument_key={','.join(batch)}"
+        try:
+            r = session.get(url, timeout=15)
+            if r.status_code == 200:
+                for _, q in r.json().get("data", {}).items():
+                    ik = q.get("instrument_token")
+                    if ik:
+                        ltp_map[ik] = safe_float(q.get("last_price"))
+            elif r.status_code == 429:
+                time.sleep(1)
+                return fetch_all_ltps(keys)  # retry after back-off
+            else:
+                print(f"  [LTP] HTTP {r.status_code} for batch {i // batch_size + 1}")
+        except Exception as e:
+            print(f"  [LTP] batch {i // batch_size + 1} error: {e}")
+        time.sleep(RATE_LIMIT_DELAY)
+    return ltp_map
+
+
+def fetch_spread_charges(near_key, next_key, lot_size, near_price, next_price):
+    """Fetch charges for both spread directions, priced at each leg's LTP."""
     # Forward: Near BUY + Next SELL
-    c_fwd = (fetch_brokerage_total(near_key, lot_size, "BUY", 0) or 0) + \
-            (fetch_brokerage_total(next_key, lot_size, "SELL", 0) or 0)
+    c_fwd = (fetch_charges_ex_brokerage(near_key, lot_size, "BUY", near_price) or 0) + \
+            (fetch_charges_ex_brokerage(next_key, lot_size, "SELL", next_price) or 0)
     time.sleep(RATE_LIMIT_DELAY)
 
     # Reverse: Near SELL + Next BUY
-    c_rev = (fetch_brokerage_total(near_key, lot_size, "SELL", 0) or 0) + \
-            (fetch_brokerage_total(next_key, lot_size, "BUY", 0) or 0)
+    c_rev = (fetch_charges_ex_brokerage(near_key, lot_size, "SELL", near_price) or 0) + \
+            (fetch_charges_ex_brokerage(next_key, lot_size, "BUY", next_price) or 0)
 
     return c_fwd, c_rev
 
@@ -169,7 +218,7 @@ def calculate_carry_cost(margin, expiry_timestamp, roi=12.0):
 # ──────────────────────────────────────────────
 # PROCESS ONE SYMBOL (called by workers)
 # ──────────────────────────────────────────────
-def process_symbol(sym, futures_index, lot_sizes):
+def process_symbol(sym, futures_index, lot_sizes, ltp_map):
     """Fetch margin + charges for one symbol. Returns a dict or None."""
     futs = futures_index.get(sym, [])
     if len(futs) < 2:
@@ -179,16 +228,20 @@ def process_symbol(sym, futures_index, lot_sizes):
     near_key = near["instrument_key"]
     nxt_key = nxt["instrument_key"]
     lot_size = lot_sizes.get(near_key, 1)
+    near_price = ltp_map.get(near_key)
+    nxt_price = ltp_map.get(nxt_key)
 
     # API calls (these are the slow part)
     margin_val = fetch_margin(near_key, nxt_key, lot_size)
     time.sleep(RATE_LIMIT_DELAY)
-    c_fwd, c_rev = fetch_spread_charges(near_key, nxt_key, lot_size)
+    c_fwd, c_rev = fetch_spread_charges(near_key, nxt_key, lot_size, near_price, nxt_price)
     carry = calculate_carry_cost(margin_val, near.get("expiry"))
 
     result = {
         "Symbol": sym,
         "Lot_Size": lot_size,
+        "Near_Price": near_price,
+        "Next_Price": nxt_price,
         "Margin": margin_val,
         "Charges_f": c_fwd,
         "Charges_r": c_rev,
@@ -196,7 +249,7 @@ def process_symbol(sym, futures_index, lot_sizes):
         "Cost_of_Carry": carry,
     }
 
-    print(f"  [{sym}] Margin={margin_val} | Fwd={c_fwd} | Rev={c_rev} | Carry={carry}")
+    print(f"  [{sym}] Px={near_price}/{nxt_price} | Margin={margin_val} | Fwd={c_fwd} | Rev={c_rev} | Carry={carry}")
     return result
 
 
@@ -211,6 +264,21 @@ if __name__ == "__main__":
     underlyings = load_underlyings()
     futures_index, lot_sizes = build_futures_index(instruments)
 
+    # Pre-fetch LTPs for all near/next legs so brokerage charges are priced
+    # correctly (value-based taxes need a real turnover, not price=0).
+    price_keys = []
+    for sym in underlyings:
+        for f in futures_index.get(sym, [])[:2]:
+            price_keys.append(f["instrument_key"])
+    price_keys = list(dict.fromkeys(price_keys))
+    print(f"[{datetime.now()}] Fetching LTPs for {len(price_keys)} legs...")
+    ltp_map = fetch_all_ltps(price_keys)
+    priced = sum(1 for v in ltp_map.values() if v)
+    print(f"[{datetime.now()}] Got {priced}/{len(price_keys)} live prices.")
+    if priced == 0:
+        print("  WARNING: no LTPs available (market closed or token invalid) — "
+              "charges will fall back to price=0 and understate statutory costs.")
+
     print(f"[{datetime.now()}] Processing {len(underlyings)} symbols with {MAX_WORKERS} workers...")
 
     results = []
@@ -218,7 +286,7 @@ if __name__ == "__main__":
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         future_to_sym = {
-            executor.submit(process_symbol, sym, futures_index, lot_sizes): sym
+            executor.submit(process_symbol, sym, futures_index, lot_sizes, ltp_map): sym
             for sym in underlyings
         }
 

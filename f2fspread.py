@@ -36,6 +36,7 @@ if not ACCESS_TOKEN:
 INSTRUMENTS_JSON = "instruments.json"
 STOCKS_CSV = "futurestockslist.csv"
 MARGIN_CSV = "margin_charges_cache.csv"
+SPREADS_CSV = "future_spreads.csv"          # historical near/next/far spreads
 MARKET_QUOTE_URL = "https://api.upstox.com/v2/market-quote/quotes"
 
 market_state = {}
@@ -70,6 +71,32 @@ def build_futures_index(instruments):
 
 def load_underlyings():
     return pd.read_csv(STOCKS_CSV)["underlying_symbol"].dropna().unique().tolist()
+
+def _clean(v):
+    return None if (v is None or pd.isna(v)) else str(v)
+
+def load_spread_history():
+    """future_spreads.csv → {symbol: [ {date, nearExp, nextExp, farExp,
+       nearClose, nextClose, farClose, nx, xf, nf}, ... ] } sorted by date."""
+    if not os.path.exists(SPREADS_CSV):
+        print(f"[warn] {SPREADS_CSV} not found — spread history disabled")
+        return {}
+    df = pd.read_csv(SPREADS_CSV, dtype={
+        "Trade Date": str, "Near Expiry": str, "Next Expiry": str, "Far Expiry": str})
+    hist = {}
+    for sym, g in df.groupby("Symbol", sort=False):
+        g = g.sort_values("Trade Date")
+        hist[sym] = [{
+            "date": r["Trade Date"],
+            "nearExp": _clean(r["Near Expiry"]), "nextExp": _clean(r["Next Expiry"]),
+            "farExp": _clean(r["Far Expiry"]),
+            "nearClose": safe_float(r["Near Close"]), "nextClose": safe_float(r["Next Close"]),
+            "farClose": safe_float(r["Far Close"]),
+            "nx": safe_float(r["Near-Next Spread"]), "xf": safe_float(r["Next-Far Spread"]),
+            "nf": safe_float(r["Near-Far Spread"]),
+        } for _, r in g.iterrows()]
+    print(f"[{datetime.now()}] Spread history: {len(hist)} symbols from {SPREADS_CSV}")
+    return hist
 
 def load_margin_data():
     if not os.path.exists(MARGIN_CSV): return {}
@@ -145,6 +172,7 @@ def build_records(snap):
 # ── INIT ──
 print(f"[{datetime.now()}] Loading...")
 _raw = load_instruments(); underlyings = load_underlyings(); margin_dict = load_margin_data()
+spread_history = load_spread_history()
 futures_index, lot_sizes = build_futures_index(_raw); del _raw
 subscribe_keys = list(dict.fromkeys([f["instrument_key"] for s in underlyings for f in futures_index.get(s, [])]))
 print(f"[{datetime.now()}] {len(underlyings)} symbols, {len(subscribe_keys)} contracts")
@@ -154,6 +182,11 @@ app = Flask(__name__, static_folder="static")
 
 @app.route("/")
 def index(): return send_from_directory("static", "index.html")
+
+@app.route("/api/history/<symbol>")
+def api_history(symbol):
+    rows = spread_history.get(symbol) or spread_history.get(symbol.upper()) or []
+    return jsonify({"symbol": symbol, "rows": rows})
 
 @app.route("/api/spreads")
 def api_spreads():
