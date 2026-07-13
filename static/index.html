@@ -288,6 +288,71 @@ td.pct-pos { color: var(--green-text); }
 td.pct-neg { color: var(--red-text); }
 td.ltp-cell { color: var(--amber-text); }
 
+/* ── PERCENTILE CELLS (spread rank vs. history) ── */
+td.pctile-cell { color: var(--text-muted); font-weight: 600; }
+td.pctile-hi { color: var(--amber-text); background: rgba(251, 191, 36, 0.12); }   /* spread unusually wide  */
+td.pctile-lo { color: var(--cyan-text);  background: rgba(56, 189, 248, 0.12); }   /* spread unusually narrow */
+
+/* ── WATCHLIST STAR ── */
+.star-btn {
+  pointer-events: auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; flex-shrink: 0;
+  padding: 0; margin-right: 4px;
+  background: none; border: none; border-radius: 4px;
+  color: var(--text-muted); font-size: 13px; line-height: 1;
+  cursor: pointer; opacity: 0.35; transition: opacity 0.12s, color 0.12s;
+  vertical-align: middle;
+}
+.star-btn:hover { opacity: 1; color: var(--amber-text); }
+.star-btn.on { opacity: 1; color: var(--amber-text); }
+.sym-text { vertical-align: middle; }
+
+/* ── TOPBAR: min-spread filter ── */
+.minspread-wrap {
+  display: flex; align-items: center; gap: 5px;
+  padding: 0 8px; height: 31px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-muted); font-size: 11px; white-space: nowrap;
+}
+.minspread-input {
+  width: 46px;
+  background: none; border: none; outline: none;
+  color: var(--text-primary); font-family: var(--font-mono); font-size: 12px;
+  text-align: right;
+}
+.minspread-input::-webkit-outer-spin-button,
+.minspread-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
+/* ── TOPBAR: active toggle state (shared with export btn) ── */
+.btn-export.active {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ── COLUMNS DROPDOWN ── */
+.cols-menu { position: relative; }
+.cols-dropdown {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 50;
+  min-width: 168px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(0,0,0,0.5);
+  padding: 6px;
+}
+.cols-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px; border-radius: 5px;
+  color: var(--text-secondary); font-size: 12px; cursor: pointer;
+  user-select: none;
+}
+.cols-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+.cols-item input { accent-color: var(--accent); cursor: pointer; }
+
 /* ── BOTTOM BAR ── */
 .bottombar {
   display: flex;

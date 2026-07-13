@@ -12,17 +12,26 @@ const COLS = [
   { key: "fLtp", label: "Far",     group: "ltp",       cellClass: "ltp-cell" },
   { key: "sNX",  label: "N→X",     group: "near-next", spread: true },
   { key: "sNXp", label: "%",       group: "near-next", pct: true },
+  { key: "pNX",  label: "%ile",    group: "near-next", pctile: true },
   { key: "sXN",  label: "X→N",     group: "near-next", spread: true },
   { key: "sXNp", label: "%",       group: "near-next", pct: true },
+  { key: "pXN",  label: "%ile",    group: "near-next", pctile: true },
   { key: "sXF",  label: "X→F",     group: "next-far",  spread: true },
   { key: "sXFp", label: "%",       group: "next-far",  pct: true },
+  { key: "pXF",  label: "%ile",    group: "next-far",  pctile: true },
   { key: "sFX",  label: "F→X",     group: "next-far",  spread: true },
   { key: "sFXp", label: "%",       group: "next-far",  pct: true },
+  { key: "pFX",  label: "%ile",    group: "next-far",  pctile: true },
   { key: "sNF",  label: "N→F",     group: "near-far",  spread: true },
   { key: "sNFp", label: "%",       group: "near-far",  pct: true },
+  { key: "pNF",  label: "%ile",    group: "near-far",  pctile: true },
   { key: "sFN",  label: "F→N",     group: "near-far",  spread: true },
   { key: "sFNp", label: "%",       group: "near-far",  pct: true },
+  { key: "pFN",  label: "%ile",    group: "near-far",  pctile: true },
 ];
+
+// spread-% columns used by the "min spread %" filter
+const SPREAD_PCT_KEYS = ["sNXp", "sXNp", "sXFp", "sFXp", "sNFp", "sFNp"];
 
 const SCROLL_COLS = COLS.filter(c => !c.frozen);
 
@@ -32,10 +41,13 @@ const SHOW_CHART_COL = true;
 const GROUP_META = {
   "info":      { label: "Info",      span: 4, cls: "col-group-info" },
   "ltp":       { label: "Last price",span: 3, cls: "col-group-ltp" },
-  "near-next": { label: "Near ↔ Next", span: 4, cls: "col-group-near-next" },
-  "next-far":  { label: "Next ↔ Far",  span: 4, cls: "col-group-next-far" },
-  "near-far":  { label: "Near ↔ Far",  span: 4, cls: "col-group-near-far" },
+  "near-next": { label: "Near ↔ Next", span: 6, cls: "col-group-near-next" },
+  "next-far":  { label: "Next ↔ Far",  span: 6, cls: "col-group-next-far" },
+  "near-far":  { label: "Near ↔ Far",  span: 6, cls: "col-group-near-far" },
 };
+
+// Ordered group list for the column-visibility menu (Symbol stays frozen/always on).
+const GROUP_ORDER = ["info", "ltp", "near-next", "next-far", "near-far"];
 
 function fmt(v) {
   if (v == null || v === "") return "—";
@@ -45,11 +57,31 @@ function fmt(v) {
   return n.toFixed(2);
 }
 
+// Percentile cells render as a whole-number percent, e.g. 95 → "95%".
+function fmtCell(col, v) {
+  if (col.pctile) return v == null || v === "" ? "—" : `${Math.round(Number(v))}%`;
+  return fmt(v);
+}
+
+// localStorage-backed state: same shape as useState, persisted under `key`.
+function usePersisted(key, initial) {
+  const [v, setV] = React.useState(() => {
+    try { const s = localStorage.getItem(key); return s != null ? JSON.parse(s) : initial; }
+    catch { return initial; }
+  });
+  React.useEffect(() => {
+    try { localStorage.setItem(key, JSON.stringify(v)); } catch { /* quota / private mode */ }
+  }, [key, v]);
+  return [v, setV];
+}
+
 function cellClass(col, v) {
   if (col.cellClass) return col.cellClass;
   if (v == null || v === "") return "";
   const n = Number(v);
   if (isNaN(n)) return "";
+  // Percentile: flag the extremes — wide (≥90) and narrow (≤10) — as trade signals.
+  if (col.pctile) return "pctile-cell" + (n >= 90 ? " pctile-hi" : n <= 10 ? " pctile-lo" : "");
   if (col.spread) return n > 0 ? "spread-pos" : n < 0 ? "spread-neg" : "";
   if (col.pct) return n > 0 ? "pct-pos" : n < 0 ? "pct-neg" : "";
   return "";
@@ -516,8 +548,8 @@ function SpreadChart({ rows, spreadKey, expiryLimit = Infinity }) {
 function ChartModal({ symbol, onClose }) {
   const [rows, setRows] = React.useState(null);
   const [err, setErr] = React.useState(null);
-  const [spreadKey, setSpreadKey] = React.useState("nx");
-  const [expiryLimit, setExpiryLimit] = React.useState(6);   // how many recent expiries to show
+  const [spreadKey, setSpreadKey] = usePersisted("f2f.modal.spreadKey", "nx");
+  const [expiryLimit, setExpiryLimit] = usePersisted("f2f.modal.expiryLimit", 6);   // how many recent expiries to show
   const [resetNonce, setResetNonce] = React.useState(0);   // bump → chart remounts → zoom resets
 
   React.useEffect(() => {
@@ -578,19 +610,67 @@ function ChartModal({ symbol, onClose }) {
   );
 }
 
+// Dropdown to show/hide whole column groups. `hiddenGroups` is the persisted
+// list of group keys currently hidden; `onToggle(key)` flips one.
+function ColumnsMenu({ hiddenGroups, onToggle }) {
+  const [open, setOpen] = React.useState(false);
+  const ref = React.useRef(null);
+  React.useEffect(() => {
+    if (!open) return;
+    const h = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    window.addEventListener("mousedown", h);
+    return () => window.removeEventListener("mousedown", h);
+  }, [open]);
+  const hiddenCount = hiddenGroups.length;
+  return (
+    <div className="cols-menu" ref={ref}>
+      <button className={"btn-export" + (open ? " active" : "")} onClick={() => setOpen(o => !o)}>
+        ▦ Columns{hiddenCount ? ` (${hiddenCount} hidden)` : ""}
+      </button>
+      {open && (
+        <div className="cols-dropdown">
+          {GROUP_ORDER.map(g => (
+            <label key={g} className="cols-item">
+              <input type="checkbox"
+                     checked={!hiddenGroups.includes(g)}
+                     onChange={() => onToggle(g)} />
+              <span>{GROUP_META[g].label}</span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function App() {
   const [data, setData] = React.useState([]);
   const [meta, setMeta] = React.useState({ ts: "", live: 0 });
-  const [search, setSearch] = React.useState("");
-  const [sortKey, setSortKey] = React.useState(null);
-  const [sortDir, setSortDir] = React.useState(1);
+  const [search, setSearch] = usePersisted("f2f.search", "");
+  const [sortKey, setSortKey] = usePersisted("f2f.sortKey", null);
+  const [sortDir, setSortDir] = usePersisted("f2f.sortDir", 1);
   const [chartSym, setChartSym] = React.useState(null);
+  // watchlist + filters + column visibility (all persisted)
+  const [watchlist, setWatchlist] = usePersisted("f2f.watchlist", []);
+  const [watchOnly, setWatchOnly] = usePersisted("f2f.watchOnly", false);
+  const [minSpread, setMinSpread] = usePersisted("f2f.minSpread", "");
+  const [hiddenGroups, setHiddenGroups] = usePersisted("f2f.hiddenGroups", []);
   const scrollRef = React.useRef(null);
   const frozenBodyRef = React.useRef(null);
 
+  const watchSet = React.useMemo(() => new Set(watchlist), [watchlist]);
+  const toggleWatch = (sym) =>
+    setWatchlist(w => (w.includes(sym) ? w.filter(s => s !== sym) : [...w, sym]));
+  const toggleGroup = (g) =>
+    setHiddenGroups(h => (h.includes(g) ? h.filter(x => x !== g) : [...h, g]));
+
+  // Columns / groups actually rendered in the scroll area (Symbol stays frozen).
+  const visibleScrollCols = React.useMemo(
+    () => SCROLL_COLS.filter(c => !hiddenGroups.includes(c.group)), [hiddenGroups]);
+
   // Frozen column is wider only when the chart button column is shown.
   React.useLayoutEffect(() => {
-    document.documentElement.style.setProperty("--frozen-width", SHOW_CHART_COL ? "168px" : "130px");
+    document.documentElement.style.setProperty("--frozen-width", SHOW_CHART_COL ? "184px" : "150px");
   }, []);
 
   // Fetch data
@@ -641,6 +721,12 @@ function App() {
       const q = search.toUpperCase();
       d = d.filter(r => r.sym && r.sym.toUpperCase().includes(q));
     }
+    if (watchOnly) d = d.filter(r => watchSet.has(r.sym));
+    const t = parseFloat(minSpread);
+    if (!isNaN(t)) {
+      const thr = Math.abs(t);
+      d = d.filter(r => SPREAD_PCT_KEYS.some(k => r[k] != null && Math.abs(r[k]) >= thr));
+    }
     if (sortKey) {
       d = [...d].sort((a, b) => {
         let av = a[sortKey], bv = b[sortKey];
@@ -650,7 +736,7 @@ function App() {
       });
     }
     return d;
-  }, [data, search, sortKey, sortDir]);
+  }, [data, search, sortKey, sortDir, watchOnly, watchSet, minSpread]);
 
   const handleSort = (key) => {
     if (sortKey === key) { setSortDir(d => d * -1); }
@@ -665,7 +751,7 @@ function App() {
   // Build group header row (for scrollable area)
   const scrollGroups = [];
   let lastGroup = null;
-  for (const col of SCROLL_COLS) {
+  for (const col of visibleScrollCols) {
     if (col.group !== lastGroup) {
       scrollGroups.push({ ...GROUP_META[col.group], group: col.group, span: 0 });
       lastGroup = col.group;
@@ -685,6 +771,22 @@ function App() {
           <div>Updated <span>{meta.ts || "—"}</span></div>
         </div>
         <div className="topbar-right">
+          <button
+            className={"btn-export" + (watchOnly ? " active" : "")}
+            title="Show only watchlisted symbols"
+            onClick={() => setWatchOnly(v => !v)}>
+            ★ Watchlist{watchlist.length ? ` (${watchlist.length})` : ""}
+          </button>
+          <div className="minspread-wrap" title="Only rows where any spread % is at least this">
+            <span>|%|≥</span>
+            <input
+              className="minspread-input"
+              type="number" step="0.1" min="0" placeholder="0"
+              value={minSpread}
+              onChange={e => setMinSpread(e.target.value)}
+            />
+          </div>
+          <ColumnsMenu hiddenGroups={hiddenGroups} onToggle={toggleGroup} />
           <div className="search-wrap">
             <SearchIcon />
             <input
@@ -725,7 +827,13 @@ function App() {
                       </button>
                     </td>
                   )}
-                  <td className="sym-cell">{r.sym || "—"}</td>
+                  <td className="sym-cell">
+                    <button
+                      className={"star-btn" + (watchSet.has(r.sym) ? " on" : "")}
+                      title={watchSet.has(r.sym) ? "Remove from watchlist" : "Add to watchlist"}
+                      onClick={() => toggleWatch(r.sym)}>★</button>
+                    <span className="sym-text">{r.sym || "—"}</span>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -742,7 +850,7 @@ function App() {
                 ))}
               </tr>
               <tr>
-                {SCROLL_COLS.map(col => (
+                {visibleScrollCols.map(col => (
                   <th key={col.key} onClick={() => handleSort(col.key)} className={sortKey === col.key ? "sorted" : ""}>
                     {col.label}{sortArrow(col.key)}
                   </th>
@@ -752,9 +860,9 @@ function App() {
             <tbody>
               {filtered.map((r, i) => (
                 <tr key={r.sym || i}>
-                  {SCROLL_COLS.map(col => (
+                  {visibleScrollCols.map(col => (
                     <td key={col.key} className={cellClass(col, r[col.key])} style={col.align ? {textAlign: col.align} : undefined}>
-                      {fmt(r[col.key])}
+                      {fmtCell(col, r[col.key])}
                     </td>
                   ))}
                 </tr>

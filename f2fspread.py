@@ -11,7 +11,7 @@ Run:
   4. python f2fspread.py                 # → http://localhost:8081
 """
 
-import os, sys, json, time, threading
+import os, sys, json, time, threading, bisect
 import pandas as pd
 import requests
 from datetime import datetime, timezone
@@ -50,6 +50,13 @@ def safe_float(x):
 
 def diff(a, b):
     return round(a - b, 4) if (a is not None and b is not None) else None
+
+def pctile(sorted_vals, x):
+    """Percentile rank of x within a pre-sorted list (0-100, integer).
+    e.g. 95 → today's spread is wider than 95% of its historical observations."""
+    if not sorted_vals or x is None:
+        return None
+    return round(bisect.bisect_right(sorted_vals, x) / len(sorted_vals) * 100)
 
 # ── DATA LOADING ──
 def load_instruments():
@@ -97,6 +104,20 @@ def load_spread_history():
         } for _, r in g.iterrows()]
     print(f"[{datetime.now()}] Spread history: {len(hist)} symbols from {SPREADS_CSV}")
     return hist
+
+def build_spread_dist(hist):
+    """Pre-sort each symbol's historical nx/xf/nf spreads so a live percentile
+    lookup is a cheap bisect. → {symbol: {nx: [...], xf: [...], nf: [...]}}."""
+    dist = {}
+    for sym, rows in hist.items():
+        d = {k: sorted(r[k] for r in rows if r.get(k) is not None)
+             for k in ("nx", "xf", "nf")}
+        # reverse directions are just the negated series
+        d["xn"] = sorted(-v for v in d["nx"])   # X→N = −(Near-Next)
+        d["fx"] = sorted(-v for v in d["xf"])   # F→X = −(Next-Far)
+        d["fn"] = sorted(-v for v in d["nf"])   # F→N = −(Near-Far)
+        dist[sym] = d
+    return dist
 
 def load_margin_data():
     if not os.path.exists(MARGIN_CSV): return {}
@@ -166,13 +187,24 @@ def build_records(snap):
         futs = futures_index.get(sym, []); near = futs[0] if len(futs)>0 else None; nxt = futs[1] if len(futs)>1 else None; far = futs[2] if len(futs)>2 else None
         ns = snap.get(near["instrument_key"], e) if near else e; xs = snap.get(nxt["instrument_key"], e) if nxt else e; fs = snap.get(far["instrument_key"], e) if far else e
         sp = compute_spreads(ns, xs, fs); m = margin_dict.get(sym, {}); lot = m.get("Lot_Size"); mg = m.get("Margin"); ch = m.get("Charges"); co = m.get("Cost_of_Carry")
-        rows.append({"sym": sym, "lot": lot, "mgn": round(mg,2) if mg else None, "chg": round(ch/lot,2) if (ch and lot) else None, "coc": round(co/lot,2) if (co and lot) else None, "nLtp": ns.get("ltp"), "xLtp": xs.get("ltp"), "fLtp": fs.get("ltp"), **sp})
+        # Live spreads on the same (next-near / far-next / far-near) convention as
+        # the historical close-based series, so percentile is an apples-to-apples rank.
+        nLtp, xLtp, fLtp = ns.get("ltp"), xs.get("ltp"), fs.get("ltp")
+        dd = spread_dist.get(sym, {})
+        pctiles = {"pNX": pctile(dd.get("nx"), diff(xLtp, nLtp)),
+                   "pXN": pctile(dd.get("xn"), diff(nLtp, xLtp)),
+                   "pXF": pctile(dd.get("xf"), diff(fLtp, xLtp)),
+                   "pFX": pctile(dd.get("fx"), diff(xLtp, fLtp)),
+                   "pNF": pctile(dd.get("nf"), diff(fLtp, nLtp)),
+                   "pFN": pctile(dd.get("fn"), diff(nLtp, fLtp))}
+        rows.append({"sym": sym, "lot": lot, "mgn": round(mg,2) if mg else None, "chg": round(ch/lot,2) if (ch and lot) else None, "coc": round(co/lot,2) if (co and lot) else None, "nLtp": nLtp, "xLtp": xLtp, "fLtp": fLtp, **sp, **pctiles})
     return rows
 
 # ── INIT ──
 print(f"[{datetime.now()}] Loading...")
 _raw = load_instruments(); underlyings = load_underlyings(); margin_dict = load_margin_data()
 spread_history = load_spread_history()
+spread_dist = build_spread_dist(spread_history)
 futures_index, lot_sizes = build_futures_index(_raw); del _raw
 subscribe_keys = list(dict.fromkeys([f["instrument_key"] for s in underlyings for f in futures_index.get(s, [])]))
 print(f"[{datetime.now()}] {len(underlyings)} symbols, {len(subscribe_keys)} contracts")
