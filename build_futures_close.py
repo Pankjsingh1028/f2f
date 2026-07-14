@@ -20,8 +20,15 @@ A future-to-future spread is simply the difference of two of those closes, e.g.
 See `spread_table()` at the bottom for a ready-made pivot.
 
 Usage:
-    python build_futures_close.py            # build from every zip in this folder
+    python build_futures_close.py            # incremental: process only bhavcopies
+                                             # newer than the latest date on file
+    python build_futures_close.py --rebuild  # full rebuild from every zip
     python build_futures_close.py --limit 5  # quick test on the first 5 files
+
+The first run (no futures_close.parquet yet) is always a full build. After that
+the parquet is the authoritative store: its max date decides which zips are new
+(the trading date is parsed from each filename, so old zips are never opened).
+Running the update twice is a no-op — "No new data found."
 """
 
 import argparse
@@ -97,14 +104,15 @@ def parse_zip(path):
     return df[list(COLUMNS.values())]
 
 
-def build(limit=None):
-    files = sorted(glob.glob(ZIP_GLOB))
-    if limit:
-        files = files[:limit]
-    if not files:
-        sys.exit(f"No bhavcopy zips found matching:\n  {ZIP_GLOB}")
+def file_date(path):
+    """Trading date encoded in a bhavcopy filename, as a Timestamp (or None)."""
+    m = DATE_IN_NAME.search(os.path.basename(path))
+    return pd.Timestamp(datetime.strptime(m.group(1), "%Y%m%d")) if m else None
 
-    print(f"Found {len(files)} bhavcopy files. Parsing...")
+
+def parse_files(files):
+    """Parse a list of bhavcopy zips into one DataFrame (None if all failed)."""
+    print(f"Parsing {len(files)} bhavcopy file(s)...")
     frames = []
     for i, path in enumerate(files, 1):
         try:
@@ -114,14 +122,51 @@ def build(limit=None):
             continue
         if i % 25 == 0 or i == len(files):
             print(f"  {i}/{len(files)} done")
+    return pd.concat(frames, ignore_index=True) if frames else None
 
-    data = pd.concat(frames, ignore_index=True)
-    data.sort_values(["symbol", "expiry", "date"], inplace=True, ignore_index=True)
+
+def build(rebuild=False, limit=None):
+    files = sorted(glob.glob(ZIP_GLOB))
+    if limit:
+        files = files[:limit]
+    if not files:
+        sys.exit(f"No bhavcopy zips found matching:\n  {ZIP_GLOB}")
+
+    existing = None
+    if not rebuild and os.path.exists(OUT_PARQUET):
+        existing = pd.read_parquet(OUT_PARQUET)
+        if existing.empty:
+            existing = None
+
+    if existing is None:
+        data = parse_files(files)
+        if data is None:
+            sys.exit("No bhavcopy file could be parsed.")
+        added = len(data)
+    else:
+        latest = existing["date"].max()
+        new_files = [f for f in files
+                     if file_date(f) is not None and file_date(f) > latest]
+        if not new_files:
+            print(f"No new data found. Dataset is up to date ({latest:%Y-%m-%d}).")
+            return existing
+        print(f"Latest date on file: {latest:%Y-%m-%d} -> "
+              f"{len(new_files)} newer bhavcopy file(s) to process.")
+        new = parse_files(new_files)
+        if new is None:
+            sys.exit("No new bhavcopy file could be parsed.")
+        # filenames decided what was new; re-check the actual dates so a
+        # mislabelled zip can never duplicate rows already on file
+        new = new[new["date"] > latest]
+        added = len(new)
+        data = pd.concat([existing, new], ignore_index=True)
+
+    data.sort_values(["date", "symbol", "expiry"], inplace=True, ignore_index=True)
 
     data.to_parquet(OUT_PARQUET, index=False)
     data.to_csv(OUT_CSV, index=False)
 
-    print(f"\nBuilt {len(data):,} contract-day rows "
+    print(f"\nAdded {added:,} rows; dataset now {len(data):,} contract-day rows "
           f"for {data['symbol'].nunique()} symbols.")
     print(f"Date range : {data['date'].min():%Y-%m-%d} -> {data['date'].max():%Y-%m-%d}")
     print(f"Wrote      : {OUT_PARQUET}")
@@ -162,10 +207,12 @@ def spread_table(data, symbol):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--rebuild", action="store_true",
+                    help="ignore existing output and rebuild from every zip")
     ap.add_argument("--limit", type=int, default=None,
                     help="parse only the first N files (quick test)")
     args = ap.parse_args()
 
     t0 = datetime.now()
-    build(limit=args.limit)
+    build(rebuild=args.rebuild, limit=args.limit)
     print(f"Elapsed: {datetime.now() - t0}")

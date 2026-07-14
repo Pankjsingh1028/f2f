@@ -10,28 +10,25 @@ const COLS = [
   { key: "nLtp", label: "Near",    group: "ltp",       cellClass: "ltp-cell" },
   { key: "xLtp", label: "Next",    group: "ltp",       cellClass: "ltp-cell" },
   { key: "fLtp", label: "Far",     group: "ltp",       cellClass: "ltp-cell" },
-  { key: "sNX",  label: "N→X",     group: "near-next", spread: true },
-  { key: "sNXp", label: "%",       group: "near-next", pct: true },
-  { key: "pNX",  label: "%ile",    group: "near-next", pctile: true },
-  { key: "sXN",  label: "X→N",     group: "near-next", spread: true },
-  { key: "sXNp", label: "%",       group: "near-next", pct: true },
-  { key: "pXN",  label: "%ile",    group: "near-next", pctile: true },
-  { key: "sXF",  label: "X→F",     group: "next-far",  spread: true },
-  { key: "sXFp", label: "%",       group: "next-far",  pct: true },
-  { key: "pXF",  label: "%ile",    group: "next-far",  pctile: true },
-  { key: "sFX",  label: "F→X",     group: "next-far",  spread: true },
-  { key: "sFXp", label: "%",       group: "next-far",  pct: true },
-  { key: "pFX",  label: "%ile",    group: "next-far",  pctile: true },
-  { key: "sNF",  label: "N→F",     group: "near-far",  spread: true },
-  { key: "sNFp", label: "%",       group: "near-far",  pct: true },
-  { key: "pNF",  label: "%ile",    group: "near-far",  pctile: true },
-  { key: "sFN",  label: "F→N",     group: "near-far",  spread: true },
-  { key: "sFNp", label: "%",       group: "near-far",  pct: true },
-  { key: "pFN",  label: "%ile",    group: "near-far",  pctile: true },
+  { key: "lsNX", label: "LTP Spread", exp: "NearNext_LTP_Spread", group: "near-next", spread: true },
+  { key: "sNX",  label: "Bid",        exp: "NearNext_Bid",        group: "near-next", spread: true },
+  { key: "sXN",  label: "Ask",        exp: "NearNext_Ask",        group: "near-next", spread: true },
+  { key: "rNX",  label: "R%",         exp: "NearNext_R%",         group: "near-next", pct: true },
+  { key: "pNX",  label: "LTP %ile",   exp: "NearNext_LTP_%ile",   group: "near-next", pctile: true },
+  { key: "lsXF", label: "LTP Spread", exp: "NextFar_LTP_Spread",  group: "next-far",  spread: true },
+  { key: "sXF",  label: "Bid",        exp: "NextFar_Bid",         group: "next-far",  spread: true },
+  { key: "sFX",  label: "Ask",        exp: "NextFar_Ask",         group: "next-far",  spread: true },
+  { key: "rXF",  label: "R%",         exp: "NextFar_R%",          group: "next-far",  pct: true },
+  { key: "pXF",  label: "LTP %ile",   exp: "NextFar_LTP_%ile",    group: "next-far",  pctile: true },
+  { key: "lsNF", label: "LTP Spread", exp: "NearFar_LTP_Spread",  group: "near-far",  spread: true },
+  { key: "sNF",  label: "Bid",        exp: "NearFar_Bid",         group: "near-far",  spread: true },
+  { key: "sFN",  label: "Ask",        exp: "NearFar_Ask",         group: "near-far",  spread: true },
+  { key: "rNF",  label: "R%",         exp: "NearFar_R%",          group: "near-far",  pct: true },
+  { key: "pNF",  label: "LTP %ile",   exp: "NearFar_LTP_%ile",    group: "near-far",  pctile: true },
 ];
 
-// spread-% columns used by the "min spread %" filter
-const SPREAD_PCT_KEYS = ["sNXp", "sXNp", "sXFp", "sFXp", "sNFp", "sFNp"];
+// return-% columns used by the "min spread %" filter
+const SPREAD_PCT_KEYS = ["rNX", "rXF", "rNF"];
 
 const SCROLL_COLS = COLS.filter(c => !c.frozen);
 
@@ -41,9 +38,9 @@ const SHOW_CHART_COL = true;
 const GROUP_META = {
   "info":      { label: "Info",      span: 4, cls: "col-group-info" },
   "ltp":       { label: "Last price",span: 3, cls: "col-group-ltp" },
-  "near-next": { label: "Near ↔ Next", span: 6, cls: "col-group-near-next" },
-  "next-far":  { label: "Next ↔ Far",  span: 6, cls: "col-group-next-far" },
-  "near-far":  { label: "Near ↔ Far",  span: 6, cls: "col-group-near-far" },
+  "near-next": { label: "Near ↔ Next", span: 5, cls: "col-group-near-next" },
+  "next-far":  { label: "Next ↔ Far",  span: 5, cls: "col-group-next-far" },
+  "near-far":  { label: "Near ↔ Far",  span: 5, cls: "col-group-near-far" },
 };
 
 // Ordered group list for the column-visibility menu (Symbol stays frozen/always on).
@@ -88,7 +85,7 @@ function cellClass(col, v) {
 }
 
 function exportCSV(data) {
-  const headers = COLS.map(c => c.label).join(",");
+  const headers = COLS.map(c => c.exp || c.label).join(",");
   const rows = data.map(r => COLS.map(c => r[c.key] ?? "").join(","));
   const csv = [headers, ...rows].join("\n");
   const blob = new Blob([csv], { type: "text/csv" });

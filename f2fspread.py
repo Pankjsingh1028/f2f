@@ -110,13 +110,8 @@ def build_spread_dist(hist):
     lookup is a cheap bisect. → {symbol: {nx: [...], xf: [...], nf: [...]}}."""
     dist = {}
     for sym, rows in hist.items():
-        d = {k: sorted(r[k] for r in rows if r.get(k) is not None)
-             for k in ("nx", "xf", "nf")}
-        # reverse directions are just the negated series
-        d["xn"] = sorted(-v for v in d["nx"])   # X→N = −(Near-Next)
-        d["fx"] = sorted(-v for v in d["xf"])   # F→X = −(Next-Far)
-        d["fn"] = sorted(-v for v in d["nf"])   # F→N = −(Near-Far)
-        dist[sym] = d
+        dist[sym] = {k: sorted(r[k] for r in rows if r.get(k) is not None)
+                     for k in ("nx", "xf", "nf")}
     return dist
 
 def load_margin_data():
@@ -176,10 +171,16 @@ def start_websocket(keys):
 
 # ── SPREADS ──
 def compute_spreads(n, x, f):
-    nl = safe_float(n.get("ltp")) or 1
-    def pct(v): return round((v / nl) * 100, 2) if v is not None else None
-    ab = {"sNX": diff(x.get("bidP"), n.get("askP")), "sXN": diff(n.get("bidP"), x.get("askP")), "sXF": diff(f.get("bidP"), x.get("askP")), "sFX": diff(x.get("bidP"), f.get("askP")), "sNF": diff(f.get("bidP"), n.get("askP")), "sFN": diff(n.get("bidP"), f.get("askP"))}
-    return {**ab, **{k+"p": pct(v) for k, v in ab.items()}}
+    # Each calendar spread is (later − earlier) and has ONE two-sided quote,
+    # both from executable prices:
+    #   Bid = sell the spread = later.bid − earlier.ask
+    #   Ask = buy  the spread = later.ask − earlier.bid   (Ask ≥ Bid always)
+    return {"sNX": diff(x.get("bidP"), n.get("askP")),  # Near-Next Bid
+            "sXN": diff(x.get("askP"), n.get("bidP")),  # Near-Next Ask
+            "sXF": diff(f.get("bidP"), x.get("askP")),  # Next-Far  Bid
+            "sFX": diff(f.get("askP"), x.get("bidP")),  # Next-Far  Ask
+            "sNF": diff(f.get("bidP"), n.get("askP")),  # Near-Far  Bid
+            "sFN": diff(f.get("askP"), n.get("bidP"))}  # Near-Far  Ask
 
 def build_records(snap):
     e = {"ltp": None, "bidP": None, "askP": None}; rows = []
@@ -187,17 +188,18 @@ def build_records(snap):
         futs = futures_index.get(sym, []); near = futs[0] if len(futs)>0 else None; nxt = futs[1] if len(futs)>1 else None; far = futs[2] if len(futs)>2 else None
         ns = snap.get(near["instrument_key"], e) if near else e; xs = snap.get(nxt["instrument_key"], e) if nxt else e; fs = snap.get(far["instrument_key"], e) if far else e
         sp = compute_spreads(ns, xs, fs); m = margin_dict.get(sym, {}); lot = m.get("Lot_Size"); mg = m.get("Margin"); ch = m.get("Charges"); co = m.get("Cost_of_Carry")
-        # Live spreads on the same (next-near / far-next / far-near) convention as
-        # the historical close-based series, so percentile is an apples-to-apples rank.
         nLtp, xLtp, fLtp = ns.get("ltp"), xs.get("ltp"), fs.get("ltp")
+        # LTP spread = later.ltp − earlier.ltp (the mid-ish reference for each pair)
+        lsNX, lsXF, lsNF = diff(xLtp, nLtp), diff(fLtp, xLtp), diff(fLtp, nLtp)
+        # R% uses the same base as the old Bid%/Ask% (near LTP), on the LTP spread.
+        nl = nLtp or 1
+        def rpct(v): return round((v / nl) * 100, 2) if v is not None else None
+        # LTP %ile = rank of the LTP spread within that pair's historical close spread.
         dd = spread_dist.get(sym, {})
-        pctiles = {"pNX": pctile(dd.get("nx"), diff(xLtp, nLtp)),
-                   "pXN": pctile(dd.get("xn"), diff(nLtp, xLtp)),
-                   "pXF": pctile(dd.get("xf"), diff(fLtp, xLtp)),
-                   "pFX": pctile(dd.get("fx"), diff(xLtp, fLtp)),
-                   "pNF": pctile(dd.get("nf"), diff(fLtp, nLtp)),
-                   "pFN": pctile(dd.get("fn"), diff(nLtp, fLtp))}
-        rows.append({"sym": sym, "lot": lot, "mgn": round(mg,2) if mg else None, "chg": round(ch/lot,2) if (ch and lot) else None, "coc": round(co/lot,2) if (co and lot) else None, "nLtp": nLtp, "xLtp": xLtp, "fLtp": fLtp, **sp, **pctiles})
+        derived = {"lsNX": lsNX, "rNX": rpct(lsNX), "pNX": pctile(dd.get("nx"), lsNX),
+                   "lsXF": lsXF, "rXF": rpct(lsXF), "pXF": pctile(dd.get("xf"), lsXF),
+                   "lsNF": lsNF, "rNF": rpct(lsNF), "pNF": pctile(dd.get("nf"), lsNF)}
+        rows.append({"sym": sym, "lot": lot, "mgn": round(mg,2) if mg else None, "chg": round(ch/lot,2) if (ch and lot) else None, "coc": round(co/lot,2) if (co and lot) else None, "nLtp": nLtp, "xLtp": xLtp, "fLtp": fLtp, **sp, **derived})
     return rows
 
 # ── INIT ──

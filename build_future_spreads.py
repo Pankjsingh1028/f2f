@@ -1,6 +1,6 @@
 """
-future_close.csv  →  future_spreads.csv
-=======================================
+futures_close.csv  →  future_spreads.csv
+========================================
 Collapses the tidy contract-day table into one row per (Trade Date, Symbol),
 classifying the (up to) three futures contracts by expiry as Near / Next / Far
 and computing the calendar spreads.
@@ -10,10 +10,19 @@ and computing the calendar spreads.
 If fewer than three contracts exist, the missing columns are left blank.
 If more than three exist, only the first three (earliest expiries) are used.
 
-Usage:  python build_future_spreads.py
+Usage:  python build_future_spreads.py             # incremental: append rows for
+                                                   # dates newer than the last
+                                                   # Trade Date already on file
+        python build_future_spreads.py --rebuild   # regenerate from scratch
+
+Each output row depends only on the futures_close rows of its own trade date,
+so incremental runs compute rows for the new dates only and append them; the
+result is identical to a full rebuild. Running twice is a no-op.
 """
 
+import argparse
 import os
+
 import pandas as pd
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -29,12 +38,8 @@ OUT_COLUMNS = [
 ]
 
 
-def build():
-    # dates read as plain strings to preserve the original format;
-    # YYYY-MM-DD sorts correctly lexically, so no datetime parsing needed.
-    df = pd.read_csv(IN_CSV, dtype={"date": str, "expiry": str})
-    df["close"] = pd.to_numeric(df["close"], errors="coerce")
-
+def compute_rows(df):
+    """One output row per (date, symbol), sorted by Trade Date then Symbol."""
     rows = []
     for (date, symbol), grp in df.groupby(["date", "symbol"], sort=True):
         grp = grp.sort_values("expiry")           # earliest expiry first
@@ -67,11 +72,44 @@ def build():
 
     out = pd.DataFrame(rows, columns=OUT_COLUMNS)
     out.sort_values(["Trade Date", "Symbol"], inplace=True, ignore_index=True)
-    out.to_csv(OUT_CSV, index=False)
+    return out
 
-    print(f"Wrote {len(out):,} rows -> {OUT_CSV}")
+
+def build(rebuild=False):
+    # dates read as plain strings to preserve the original format;
+    # YYYY-MM-DD sorts correctly lexically, so no datetime parsing needed.
+    df = pd.read_csv(IN_CSV, dtype={"date": str, "expiry": str})
+    df["close"] = pd.to_numeric(df["close"], errors="coerce")
+
+    last_date = None
+    if not rebuild and os.path.exists(OUT_CSV):
+        done = pd.read_csv(OUT_CSV, usecols=["Trade Date"], dtype=str)["Trade Date"]
+        if len(done):
+            last_date = done.max()
+
+    if last_date is None:
+        out = compute_rows(df)
+        out.to_csv(OUT_CSV, index=False)
+        print(f"Wrote {len(out):,} rows -> {OUT_CSV}")
+        return out
+
+    df = df[df["date"] > last_date]
+    if df.empty:
+        print(f"No new data found. Spreads are up to date ({last_date}).")
+        return None
+
+    # New dates all sort after last_date and the existing file is already
+    # (Trade Date, Symbol)-sorted, so appending keeps the file sorted.
+    out = compute_rows(df)
+    out.to_csv(OUT_CSV, mode="a", header=False, index=False)
+    print(f"Appended {len(out):,} rows for dates after {last_date} -> {OUT_CSV}")
     return out
 
 
 if __name__ == "__main__":
-    build()
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--rebuild", action="store_true",
+                    help="ignore existing output and rebuild from scratch")
+    args = ap.parse_args()
+    build(rebuild=args.rebuild)
