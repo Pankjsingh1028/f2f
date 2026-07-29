@@ -124,8 +124,10 @@ function CloseIcon() {
 // ── DATE / TICK HELPERS ──────────────────────────────────────────────
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 function parseDate(s) { return Date.parse(s + "T00:00:00Z"); }
-function dayOfMonth(s) { return Number(s.slice(8, 10)); }               // "2025-07-15" → 15
 function ym(s) { return s ? s.slice(0, 7) : null; }                     // "2025-07-15" → "2025-07"
+function daysBetween(a, b) {                                            // calendar days, a → b
+  return Math.round((parseDate(b) - parseDate(a)) / 86400000);
+}
 function fmtFull(s) {
   if (!s) return "—";
   const d = new Date(parseDate(s));
@@ -194,9 +196,11 @@ const AVG_KEY = "__avg__";
 const AVG_COLOR = "#e5e7eb";   // light gray — historical average line
 
 // ── INTERACTIVE SPREAD CHART ─────────────────────────────────────────
-// X-axis is normalized to day-of-month (1–31). Every expiry cycle is drawn as
-// its own line, all overlaid on the same 1–31 axis so seasonal patterns line up.
-const X_MIN = 1, X_MAX = 31;
+// X-axis is "cycle day": calendar days since the contract became the near month,
+// where day 1 is the first session after the previous expiry. Every expiry cycle
+// is drawn as its own line on that shared axis, so cycles line up from the roll
+// onward regardless of which calendar month the sessions fall in.
+const X_MIN = 1;
 
 function SpreadChart({ rows, spreadKey, expiryLimit = Infinity }) {
   const wrapRef = React.useRef(null);
@@ -205,7 +209,9 @@ function SpreadChart({ rows, spreadKey, expiryLimit = Infinity }) {
   const clickTimer = React.useRef(null);
   const [width, setWidth] = React.useState(1000);
   const [vh, setVh] = React.useState(typeof window !== "undefined" ? window.innerHeight : 900);
-  const [view, setView] = React.useState({ min: X_MIN, max: X_MAX });   // {min,max} in day units
+  // {min,max} in cycle-day units. Placeholder until the layout effect below
+  // fits it to the real axis extent (which needs `cycles`, computed further down).
+  const [view, setView] = React.useState({ min: X_MIN, max: X_MIN + 1 });
   const [hover, setHover] = React.useState(null);
   const [hidden, setHidden] = React.useState(() => new Set());          // hidden series keys
   const [legendHi, setLegendHi] = React.useState(null);                 // key highlighted via legend
@@ -227,23 +233,32 @@ function SpreadChart({ rows, spreadKey, expiryLimit = Infinity }) {
   const k = Math.max(0.85, Math.min(width / BASE_W, 1.7));
   const height = Math.round(Math.min(width * 0.46, Math.max(300, vh * 0.92 - 220 * k)));
 
-  // One line per contract month, keyed by near expiry. Also computes per-cycle
-  // stats (max/min/avg), tags its extreme points, assigns a stable color, and
-  // stores a back-ref on each point so the tooltip/highlight can read it cheaply.
+  // One line per contract month, keyed by near expiry — a session belongs to the
+  // cycle it is the NEAR month for, not to its own calendar month. So 29-Jul-26,
+  // the day after the Jul expiry, plots on the Aug '26 line at cycle day 1.
+  // Also computes per-cycle stats (max/min/avg), tags its extreme points, assigns
+  // a stable color, and stores a back-ref on each point for the tooltip.
   const cycles = React.useMemo(() => {
     const map = new Map();
     for (const r of rows) {
       const v = r[spreadKey];
       if (v == null || !r.nearExp || !r.date) continue;
-      if (ym(r.date) !== ym(r.nearExp)) continue;
       let c = map.get(r.nearExp) || { key: r.nearExp, month: ym(r.nearExp), pts: [] };
-      c.pts.push({ x: dayOfMonth(r.date), v, row: r });
+      c.pts.push({ v, row: r });
       map.set(r.nearExp, c);
     }
     const out = [...map.values()];
     out.sort((a, b) => a.key.localeCompare(b.key));       // chronological → stable colors
     out.forEach((c, i) => {
-      c.pts.sort((a, b) => a.x - b.x);
+      c.pts.sort((a, b) => a.row.date.localeCompare(b.row.date));
+      // Day 1 = first session this contract traded as the near month (the day
+      // after the previous expiry), read off the data rather than assumed, so a
+      // symbol that skips a month still anchors correctly. Caveat: the OLDEST
+      // cycle in the CSV starts where the data window starts, not at a roll, so
+      // its early days are clipped.
+      c.start = c.pts[0].row.date;
+      c.pts.forEach(p => { p.x = daysBetween(c.start, p.row.date) + 1; });
+      c.span = c.pts[c.pts.length - 1].x;
       c.color = CYCLE_COLORS[i % CYCLE_COLORS.length];
       let mx = -Infinity, mn = Infinity, sum = 0, mxi = 0, mni = 0;
       c.pts.forEach((p, j) => {
@@ -265,13 +280,22 @@ function SpreadChart({ rows, spreadKey, expiryLimit = Infinity }) {
     () => (expiryLimit >= cycles.length ? cycles : cycles.slice(cycles.length - expiryLimit)),
     [cycles, expiryLimit]);
 
-  // Historical average across the *displayed* expiries for each trading day (1–31).
+  // Cycles run different lengths (a roll-to-expiry window is ~28–35 calendar
+  // days), so the axis is sized to the longest one actually on screen.
+  const xDomain = React.useMemo(() => {
+    let mx = X_MIN + 1;
+    for (const c of limitedCycles) if (c.span > mx) mx = c.span;
+    return { min: X_MIN, max: mx };
+  }, [limitedCycles]);
+
+  // Historical average across the *displayed* expiries for each cycle day.
   const avgSeries = React.useMemo(() => {
-    const sum = new Array(32).fill(0), cnt = new Array(32).fill(0);
+    const n = xDomain.max;
+    const sum = new Array(n + 2).fill(0), cnt = new Array(n + 2).fill(0);
     for (const c of limitedCycles) for (const p of c.pts) { sum[p.x] += p.v; cnt[p.x]++; }
     const s = { key: AVG_KEY, month: "AVG", color: AVG_COLOR, isAvg: true, pts: [] };
     let mx = -Infinity, mn = Infinity, tot = 0;
-    for (let d = 1; d <= 31; d++) if (cnt[d] > 0) {
+    for (let d = 1; d <= n; d++) if (cnt[d] > 0) {
       const v = sum[d] / cnt[d];
       const p = { x: d, v, cycle: s };
       s.pts.push(p);
@@ -279,20 +303,24 @@ function SpreadChart({ rows, spreadKey, expiryLimit = Infinity }) {
     }
     s.max = mx; s.min = mn; s.avg = s.pts.length ? tot / s.pts.length : 0;
     return s;
-  }, [limitedCycles]);
+  }, [limitedCycles, xDomain]);
 
-  // "Today" = day-of-month of the most recent trading date in the data.
+  // "Today" = cycle day of the most recent session in the data, i.e. how far the
+  // live (near) cycle has run. Taken from the newest point across all cycles.
   const todayDay = React.useMemo(() => {
-    let last = null;
-    for (const r of rows) if (r.date && (!last || r.date > last)) last = r.date;
-    return last ? dayOfMonth(last) : null;
-  }, [rows]);
+    let best = null;
+    for (const c of cycles) for (const p of c.pts)
+      if (!best || p.row.date > best.row.date) best = p;
+    return best ? best.x : null;
+  }, [cycles]);
 
-  // reset transient view/filter state whenever the symbol changes
-  React.useEffect(() => {
-    setView({ min: X_MIN, max: X_MAX });
-    setHidden(new Set());
-  }, [rows]);
+  // Reset transient view/filter state when the symbol changes or the axis is
+  // resized by a different expiry count. Layout effect so the first paint after
+  // a domain change already uses the new extent.
+  React.useLayoutEffect(() => {
+    setView({ min: xDomain.min, max: xDomain.max });
+  }, [xDomain]);
+  React.useEffect(() => { setHidden(new Set()); }, [rows]);
 
   const isVisible = key => !hidden.has(key);
   const drawnCycles = limitedCycles.filter(c => isVisible(c.key));
@@ -321,7 +349,7 @@ function SpreadChart({ rows, spreadKey, expiryLimit = Infinity }) {
 
   // Native non-passive wheel listener so preventDefault works (React's onWheel is passive).
   const wheelState = React.useRef();
-  wheelState.current = { vmin, vmax, plotW, padL, setView };
+  wheelState.current = { vmin, vmax, plotW, padL, setView, xDomain };
   React.useEffect(() => {
     const svg = svgRef.current; if (!svg) return;
     const handler = e => {
@@ -332,8 +360,8 @@ function SpreadChart({ rows, spreadKey, expiryLimit = Infinity }) {
       const factor = e.deltaY < 0 ? 0.82 : 1.22;
       let nmin = t - (t - s.vmin) * factor;
       let nmax = t + (s.vmax - t) * factor;
-      if (nmin < X_MIN) nmin = X_MIN;
-      if (nmax > X_MAX) nmax = X_MAX;
+      if (nmin < s.xDomain.min) nmin = s.xDomain.min;
+      if (nmax > s.xDomain.max) nmax = s.xDomain.max;
       if (nmax - nmin < 2) return;                        // don't zoom past ~2 days
       s.setView({ min: nmin, max: nmax });
     };
@@ -352,8 +380,8 @@ function SpreadChart({ rows, spreadKey, expiryLimit = Infinity }) {
       const dt = (e.clientX - d.x) / plotW * (d.max - d.min);
       const span = d.max - d.min;
       let nmin = d.min - dt, nmax = d.max - dt;
-      if (nmin < X_MIN) { nmin = X_MIN; nmax = nmin + span; }
-      if (nmax > X_MAX) { nmax = X_MAX; nmin = nmax - span; }
+      if (nmin < xDomain.min) { nmin = xDomain.min; nmax = nmin + span; }
+      if (nmax > xDomain.max) { nmax = xDomain.max; nmin = nmax - span; }
       setView({ min: nmin, max: nmax });
       return;
     }
@@ -444,14 +472,14 @@ function SpreadChart({ rows, spreadKey, expiryLimit = Infinity }) {
             <text x={padL - 8 * k} y={yS(t) + 3 * k} className="axis-label" fontSize={10 * k} textAnchor="end">{t.toFixed(2)}</text>
           </g>
         ))}
-        {/* x grid + labels (day of month) */}
+        {/* x grid + labels (cycle day) */}
         {xTicks.map(d => (
           <g key={"x" + d}>
             <line x1={xS(d)} y1={padT} x2={xS(d)} y2={padT + plotH} className="grid-line" />
             <text x={xS(d)} y={padT + plotH + 16 * k} className="axis-label" fontSize={10 * k} textAnchor="middle">{d}</text>
           </g>
         ))}
-        <text x={padL + plotW / 2} y={height - 6 * k} className="axis-title" fontSize={10 * k} textAnchor="middle">Trading day of month</text>
+        <text x={padL + plotW / 2} y={height - 6 * k} className="axis-title" fontSize={10 * k} textAnchor="middle">Days since cycle start (day 1 = first session after previous expiry)</text>
 
         {/* clipped plot content */}
         <g clipPath="url(#plotclip)">
@@ -527,7 +555,7 @@ function SpreadChart({ rows, spreadKey, expiryLimit = Infinity }) {
             </div>
             {badge && <div className={"tip-badge " + (hover.isMax ? "bg-hi" : "bg-lo")}>{badge}</div>}
             {!c.isAvg && <div className="tip-row"><span>Trade Date</span><b>{fmtFull(hover.row.date)}</b></div>}
-            <div className="tip-row"><span>Trading Day</span><b>{hover.x}</b></div>
+            <div className="tip-row"><span>Cycle Day</span><b>{hover.x}</b></div>
             <div className="tip-row tip-spread">
               <span>Spread</span>
               <b className={hover.v > 0 ? "spread-pos" : hover.v < 0 ? "spread-neg" : ""}>{fmt(hover.v)}</b>
