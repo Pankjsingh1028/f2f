@@ -13,22 +13,61 @@ const COLS = [
   { key: "lsNX", label: "LTP Spread", exp: "NearNext_LTP_Spread", group: "near-next", spread: true },
   { key: "sNX",  label: "Bid",        exp: "NearNext_Bid",        group: "near-next", spread: true },
   { key: "sXN",  label: "Ask",        exp: "NearNext_Ask",        group: "near-next", spread: true },
-  { key: "rNX",  label: "R%",         exp: "NearNext_R%",         group: "near-next", pct: true },
   { key: "pNX",  label: "LTP %ile",   exp: "NearNext_LTP_%ile",   group: "near-next", pctile: true },
+  { key: "aNX",   label: "Avg",  exp: "NearNext_Hist_Avg",     group: "near-next", hist: "avg" },
+  { key: "alNX",  label: "AL",   exp: "NearNext_Avg_Low",      group: "near-next", hist: "avglo" },
+  { key: "aldNX", label: "ALD",  exp: "NearNext_Avg_Low_Day",  group: "near-next", hist: "ald", day: true },
+  { key: "hNX",   label: "High", exp: "NearNext_Hist_High",    group: "near-next", hist: "hi" },
+  { key: "lNX",   label: "Low",  exp: "NearNext_Hist_Low",     group: "near-next", hist: "lo" },
   { key: "lsXF", label: "LTP Spread", exp: "NextFar_LTP_Spread",  group: "next-far",  spread: true },
   { key: "sXF",  label: "Bid",        exp: "NextFar_Bid",         group: "next-far",  spread: true },
   { key: "sFX",  label: "Ask",        exp: "NextFar_Ask",         group: "next-far",  spread: true },
-  { key: "rXF",  label: "R%",         exp: "NextFar_R%",          group: "next-far",  pct: true },
   { key: "pXF",  label: "LTP %ile",   exp: "NextFar_LTP_%ile",    group: "next-far",  pctile: true },
+  { key: "aXF",   label: "Avg",  exp: "NextFar_Hist_Avg",      group: "next-far",  hist: "avg" },
+  { key: "alXF",  label: "AL",   exp: "NextFar_Avg_Low",       group: "next-far",  hist: "avglo" },
+  { key: "aldXF", label: "ALD",  exp: "NextFar_Avg_Low_Day",   group: "next-far",  hist: "ald", day: true },
+  { key: "hXF",   label: "High", exp: "NextFar_Hist_High",     group: "next-far",  hist: "hi" },
+  { key: "lXF",   label: "Low",  exp: "NextFar_Hist_Low",      group: "next-far",  hist: "lo" },
   { key: "lsNF", label: "LTP Spread", exp: "NearFar_LTP_Spread",  group: "near-far",  spread: true },
   { key: "sNF",  label: "Bid",        exp: "NearFar_Bid",         group: "near-far",  spread: true },
   { key: "sFN",  label: "Ask",        exp: "NearFar_Ask",         group: "near-far",  spread: true },
-  { key: "rNF",  label: "R%",         exp: "NearFar_R%",          group: "near-far",  pct: true },
   { key: "pNF",  label: "LTP %ile",   exp: "NearFar_LTP_%ile",    group: "near-far",  pctile: true },
+  { key: "aNF",   label: "Avg",  exp: "NearFar_Hist_Avg",      group: "near-far",  hist: "avg" },
+  { key: "alNF",  label: "AL",   exp: "NearFar_Avg_Low",       group: "near-far",  hist: "avglo" },
+  { key: "aldNF", label: "ALD",  exp: "NearFar_Avg_Low_Day",   group: "near-far",  hist: "ald", day: true },
+  { key: "hNF",   label: "High", exp: "NearFar_Hist_High",     group: "near-far",  hist: "hi" },
+  { key: "lNF",   label: "Low",  exp: "NearFar_Hist_Low",      group: "near-far",  hist: "lo" },
 ];
 
-// return-% columns used by the "min spread %" filter
+// LTP-spread-as-%-of-near columns behind the "min spread %" filter. Not shown as
+// table columns (the old R% headers) but still served by /api/spreads.
 const SPREAD_PCT_KEYS = ["rNX", "rXF", "rNF"];
+
+// Historical lookback windows for the Avg / High / Low columns. `key` is the
+// value sent to /api/spread-stats; every window ends yesterday — today's live
+// session is always excluded so it can't skew its own benchmark.
+const LOOKBACK_OPTS = [
+  { key: "1m",  label: "1 Month",  short: "1M" },
+  { key: "3m",  label: "3 Months", short: "3M" },
+  { key: "6m",  label: "6 Months", short: "6M" },
+  { key: "1y",  label: "1 Year",   short: "1Y" },
+  { key: "all", label: "All Data", short: "All" },
+];
+const DEFAULT_LOOKBACK = "6m";
+
+const HIST_TITLES = {
+  avg: "Average spread across previous trading days in the lookback window (excludes today)",
+  hi:  "Highest spread recorded in the lookback window (excludes today)",
+  lo:  "Lowest spread recorded in the lookback window (excludes today)",
+  avglo: "Average Low — the lowest the average spread gets at any point in the cycle. Averages every cycle's "
+     + "spread day by day across the lookback window, then takes the low point of that curve. ALD is the day "
+     + "it falls on. Not the same as Low: that is a single extreme print, this is where the typical cycle bottoms out. "
+     + "Counts only cycles whose start is known, so where a symbol's data begins mid-cycle those early sessions "
+     + "are left out — which is why AL can occasionally sit above Avg.",
+  ald: "Average Low Day — the cycle day the AL figure falls on, counting from day 1 = first session after the "
+     + "previous expiry. Compare it with \"Day of expiry\" in the header to see where today sits relative to the "
+     + "typical low. Days seen in fewer than half the window's cycles are ignored.",
+};
 
 const SCROLL_COLS = COLS.filter(c => !c.frozen);
 
@@ -38,9 +77,9 @@ const SHOW_CHART_COL = true;
 const GROUP_META = {
   "info":      { label: "Info",      span: 4, cls: "col-group-info" },
   "ltp":       { label: "Last price",span: 3, cls: "col-group-ltp" },
-  "near-next": { label: "Near ↔ Next", span: 5, cls: "col-group-near-next" },
-  "next-far":  { label: "Next ↔ Far",  span: 5, cls: "col-group-next-far" },
-  "near-far":  { label: "Near ↔ Far",  span: 5, cls: "col-group-near-far" },
+  "near-next": { label: "Near ↔ Next", span: 9, cls: "col-group-near-next" },
+  "next-far":  { label: "Next ↔ Far",  span: 9, cls: "col-group-next-far" },
+  "near-far":  { label: "Near ↔ Far",  span: 9, cls: "col-group-near-far" },
 };
 
 // Ordered group list for the column-visibility menu (Symbol stays frozen/always on).
@@ -57,6 +96,8 @@ function fmt(v) {
 // Percentile cells render as a whole-number percent, e.g. 95 → "95%".
 function fmtCell(col, v) {
   if (col.pctile) return v == null || v === "" ? "—" : `${Math.round(Number(v))}%`;
+  // Cycle-day cells are ordinals, not prices — "16", never "16.00".
+  if (col.day) return v == null || v === "" ? "—" : String(Math.round(Number(v)));
   return fmt(v);
 }
 
@@ -79,6 +120,9 @@ function cellClass(col, v) {
   if (isNaN(n)) return "";
   // Percentile: flag the extremes — wide (≥90) and narrow (≤10) — as trade signals.
   if (col.pctile) return "pctile-cell" + (n >= 90 ? " pctile-hi" : n <= 10 ? " pctile-lo" : "");
+  // Historical stats: tinted but unfilled, so they read as reference values
+  // rather than competing with the live spread cells next to them.
+  if (col.hist) return "hist-cell hist-" + col.hist;
   if (col.spread) return n > 0 ? "spread-pos" : n < 0 ? "spread-neg" : "";
   if (col.pct) return n > 0 ? "pct-pos" : n < 0 ? "pct-neg" : "";
   return "";
@@ -132,6 +176,14 @@ function fmtFull(s) {
   if (!s) return "—";
   const d = new Date(parseDate(s));
   return `${String(d.getUTCDate()).padStart(2,"0")}-${MONTHS[d.getUTCMonth()]}-${d.getUTCFullYear()}`;
+}
+// Hover text for the "Day of expiry" chips — the bare number doesn't say which
+// cycle it counts within, or how much of that cycle is left.
+function cycleTitle(c) {
+  if (!c || c.day == null) return "Expiry cycle position unavailable";
+  return `Day ${c.day} of the expiry cycle — began ${fmtFull(c.start)}, expires ${fmtFull(c.expiry)}`
+       + (c.dte != null ? ` (${c.dte} days away)` : "")
+       + ". Day 1 is the first session after the previous expiry, matching the chart's x-axis.";
 }
 function monthLabel(ymStr) {                                            // "2025-07" → "Jul 2025"
   if (!ymStr) return "—";
@@ -195,6 +247,16 @@ const CYCLE_COLORS = [
 const AVG_KEY = "__avg__";
 const AVG_COLOR = "#e5e7eb";   // light gray — historical average line
 
+// Color is keyed to the expiry's absolute month, NOT to its position in this
+// symbol's expiry list, so Aug '26 wears the same hue on every symbol's chart
+// even when symbols start at different dates or skip months. Consecutive
+// expiries still step through the palette in order, keeping the warm/cool
+// alternation above. Same month of different years differ (12 mod 16 ≠ 0).
+function cycleColor(expiry) {
+  const y = +expiry.slice(0, 4), m = +expiry.slice(5, 7);
+  return CYCLE_COLORS[(y * 12 + (m - 1)) % CYCLE_COLORS.length];
+}
+
 // ── INTERACTIVE SPREAD CHART ─────────────────────────────────────────
 // X-axis is "cycle day": calendar days since the contract became the near month,
 // where day 1 is the first session after the previous expiry. Every expiry cycle
@@ -202,7 +264,7 @@ const AVG_COLOR = "#e5e7eb";   // light gray — historical average line
 // onward regardless of which calendar month the sessions fall in.
 const X_MIN = 1;
 
-function SpreadChart({ rows, spreadKey, expiryLimit = Infinity }) {
+function SpreadChart({ rows, spreadKey, expiryLimit = Infinity, todayDay: todayDayProp }) {
   const wrapRef = React.useRef(null);
   const svgRef = React.useRef(null);
   const dragRef = React.useRef(null);
@@ -237,7 +299,7 @@ function SpreadChart({ rows, spreadKey, expiryLimit = Infinity }) {
   // cycle it is the NEAR month for, not to its own calendar month. So 29-Jul-26,
   // the day after the Jul expiry, plots on the Aug '26 line at cycle day 1.
   // Also computes per-cycle stats (max/min/avg), tags its extreme points, assigns
-  // a stable color, and stores a back-ref on each point for the tooltip.
+  // the expiry's color, and stores a back-ref on each point for the tooltip.
   const cycles = React.useMemo(() => {
     const map = new Map();
     for (const r of rows) {
@@ -248,8 +310,8 @@ function SpreadChart({ rows, spreadKey, expiryLimit = Infinity }) {
       map.set(r.nearExp, c);
     }
     const out = [...map.values()];
-    out.sort((a, b) => a.key.localeCompare(b.key));       // chronological → stable colors
-    out.forEach((c, i) => {
+    out.sort((a, b) => a.key.localeCompare(b.key));       // chronological
+    out.forEach(c => {
       c.pts.sort((a, b) => a.row.date.localeCompare(b.row.date));
       // Day 1 = first session this contract traded as the near month (the day
       // after the previous expiry), read off the data rather than assumed, so a
@@ -259,7 +321,7 @@ function SpreadChart({ rows, spreadKey, expiryLimit = Infinity }) {
       c.start = c.pts[0].row.date;
       c.pts.forEach(p => { p.x = daysBetween(c.start, p.row.date) + 1; });
       c.span = c.pts[c.pts.length - 1].x;
-      c.color = CYCLE_COLORS[i % CYCLE_COLORS.length];
+      c.color = cycleColor(c.key);
       let mx = -Infinity, mn = Infinity, sum = 0, mxi = 0, mni = 0;
       c.pts.forEach((p, j) => {
         sum += p.v;
@@ -275,7 +337,7 @@ function SpreadChart({ rows, spreadKey, expiryLimit = Infinity }) {
   }, [rows, spreadKey]);
 
   // Restrict to the N most-recent expiries (newest = last, chronologically).
-  // Colors were assigned on the full list above, so they stay stable per expiry.
+  // Colors come from the expiry date itself, so slicing never recolors a line.
   const limitedCycles = React.useMemo(
     () => (expiryLimit >= cycles.length ? cycles : cycles.slice(cycles.length - expiryLimit)),
     [cycles, expiryLimit]);
@@ -305,14 +367,18 @@ function SpreadChart({ rows, spreadKey, expiryLimit = Infinity }) {
     return s;
   }, [limitedCycles, xDomain]);
 
-  // "Today" = cycle day of the most recent session in the data, i.e. how far the
-  // live (near) cycle has run. Taken from the newest point across all cycles.
+  // "Today" = the cycle day the server reports, so the marker agrees with the
+  // "Day of expiry" in the header. That is the real calendar position, which
+  // during a live session runs one day ahead of the newest row in the CSV (today's
+  // close isn't written until the session ends). Falls back to the newest data
+  // point when no cycle day was supplied.
   const todayDay = React.useMemo(() => {
+    if (todayDayProp != null) return todayDayProp;
     let best = null;
     for (const c of cycles) for (const p of c.pts)
       if (!best || p.row.date > best.row.date) best = p;
     return best ? best.x : null;
-  }, [cycles]);
+  }, [cycles, todayDayProp]);
 
   // Reset transient view/filter state when the symbol changes or the axis is
   // resized by a different expiry count. Layout effect so the first paint after
@@ -572,6 +638,7 @@ function SpreadChart({ rows, spreadKey, expiryLimit = Infinity }) {
 
 function ChartModal({ symbol, onClose }) {
   const [rows, setRows] = React.useState(null);
+  const [cycle, setCycle] = React.useState(null);
   const [err, setErr] = React.useState(null);
   const [spreadKey, setSpreadKey] = usePersisted("f2f.modal.spreadKey", "nx");
   const [expiryLimit, setExpiryLimit] = usePersisted("f2f.modal.expiryLimit", 6);   // how many recent expiries to show
@@ -579,10 +646,10 @@ function ChartModal({ symbol, onClose }) {
 
   React.useEffect(() => {
     let active = true;
-    setRows(null); setErr(null);
+    setRows(null); setCycle(null); setErr(null);
     fetch(`/api/history/${encodeURIComponent(symbol)}`)
       .then(r => r.json())
-      .then(j => { if (active) setRows(j.rows || []); })
+      .then(j => { if (active) { setRows(j.rows || []); setCycle(j.cycle || null); } })
       .catch(e => { if (active) setErr(String(e)); });
     return () => { active = false; };
   }, [symbol]);
@@ -601,6 +668,11 @@ function ChartModal({ symbol, onClose }) {
             <ChartIcon />
             <span className="modal-sym">{symbol}</span>
             <span className="modal-sub">Futures spread history</span>
+            {cycle && cycle.day != null && (
+              <span className="cycle-chip" title={cycleTitle(cycle)}>
+                Day of expiry: <b>{cycle.day}</b>
+              </span>
+            )}
           </div>
           <div className="modal-controls">
             <div className="seg" title="Spread type">
@@ -624,7 +696,9 @@ function ChartModal({ symbol, onClose }) {
         <div className="modal-body">
           {err && <div className="chart-empty">Failed to load: {err}</div>}
           {!err && rows === null && <div className="chart-empty">Loading…</div>}
-          {!err && rows !== null && <SpreadChart key={resetNonce} rows={rows} spreadKey={spreadKey} expiryLimit={expiryLimit} />}
+          {!err && rows !== null && <SpreadChart key={resetNonce} rows={rows} spreadKey={spreadKey}
+                                                 expiryLimit={expiryLimit}
+                                                 todayDay={cycle ? cycle.day : null} />}
         </div>
         <div className="modal-foot">
           <span>Scroll to zoom · drag to pan · hover for details</span>
@@ -670,7 +744,7 @@ function ColumnsMenu({ hiddenGroups, onToggle }) {
 
 function App() {
   const [data, setData] = React.useState([]);
-  const [meta, setMeta] = React.useState({ ts: "", live: 0 });
+  const [meta, setMeta] = React.useState({ ts: "", live: 0, cycle: null });
   const [search, setSearch] = usePersisted("f2f.search", "");
   const [sortKey, setSortKey] = usePersisted("f2f.sortKey", null);
   const [sortDir, setSortDir] = usePersisted("f2f.sortDir", 1);
@@ -680,6 +754,9 @@ function App() {
   const [watchOnly, setWatchOnly] = usePersisted("f2f.watchOnly", false);
   const [minSpread, setMinSpread] = usePersisted("f2f.minSpread", "");
   const [hiddenGroups, setHiddenGroups] = usePersisted("f2f.hiddenGroups", []);
+  // historical Avg/High/Low window + the per-symbol stats fetched for it
+  const [lookback, setLookback] = usePersisted("f2f.lookback", DEFAULT_LOOKBACK);
+  const [stats, setStats] = React.useState({});
   const scrollRef = React.useRef(null);
   const frozenBodyRef = React.useRef(null);
 
@@ -707,7 +784,7 @@ function App() {
         const j = await res.json();
         if (active) {
           setData(j.data || []);
-          setMeta({ ts: j.ts, live: j.live });
+          setMeta({ ts: j.ts, live: j.live, cycle: j.cycle || null });
         }
       } catch (e) { console.error("Fetch error:", e); }
     };
@@ -715,6 +792,23 @@ function App() {
     const id = setInterval(poll, 500);
     return () => { active = false; clearInterval(id); };
   }, []);
+
+  // Historical stats are static for the session, so they ride a separate fetch
+  // that only re-runs when the lookback window changes — not the 500ms poll.
+  React.useEffect(() => {
+    let active = true;
+    fetch(`/api/spread-stats?lookback=${encodeURIComponent(lookback)}`)
+      .then(r => r.json())
+      .then(j => { if (active) setStats(j.data || {}); })
+      .catch(e => console.error("Stats fetch error:", e));
+    return () => { active = false; };
+  }, [lookback]);
+
+  // Live rows + their symbol's historical Avg/High/Low, merged before filtering
+  // and sorting so the new columns are sortable like any other.
+  const rows = React.useMemo(
+    () => data.map(r => { const s = stats[r.sym]; return s ? { ...r, ...s } : r; }),
+    [data, stats]);
 
   // Sync frozen column scroll
   React.useEffect(() => {
@@ -741,7 +835,7 @@ function App() {
 
   // Filter + sort
   const filtered = React.useMemo(() => {
-    let d = data;
+    let d = rows;
     if (search) {
       const q = search.toUpperCase();
       d = d.filter(r => r.sym && r.sym.toUpperCase().includes(q));
@@ -761,12 +855,16 @@ function App() {
       });
     }
     return d;
-  }, [data, search, sortKey, sortDir, watchOnly, watchSet, minSpread]);
+  }, [rows, search, sortKey, sortDir, watchOnly, watchSet, minSpread]);
 
   const handleSort = (key) => {
     if (sortKey === key) { setSortDir(d => d * -1); }
     else { setSortKey(key); setSortDir(1); }
   };
+
+  // Short window tag ("6M") appended to the Avg/High/Low headers so the table
+  // says which lookback it's showing without a trip to the dropdown.
+  const lbShort = (LOOKBACK_OPTS.find(o => o.key === lookback) || {}).short || "";
 
   const sortArrow = (key) => {
     if (sortKey !== key) return null;
@@ -793,6 +891,9 @@ function App() {
         <div className="topbar-stats">
           <div><span>{meta.live}</span> instruments</div>
           <div><span>{filtered.length}</span> / {data.length} symbols</div>
+          <div className="cycle-stat" title={cycleTitle(meta.cycle)}>
+            Day of expiry: <span>{meta.cycle && meta.cycle.day != null ? meta.cycle.day : "—"}</span>
+          </div>
           <div>Updated <span>{meta.ts || "—"}</span></div>
         </div>
         <div className="topbar-right">
@@ -810,6 +911,15 @@ function App() {
               value={minSpread}
               onChange={e => setMinSpread(e.target.value)}
             />
+          </div>
+          <div className="lookback-wrap" title="Lookback window for the Avg / High / Low columns (always excludes today)">
+            <span>Hist</span>
+            <select className="lookback-select" value={lookback}
+                    onChange={e => setLookback(e.target.value)}>
+              {LOOKBACK_OPTS.map(o => (
+                <option key={o.key} value={o.key}>{o.label}</option>
+              ))}
+            </select>
           </div>
           <ColumnsMenu hiddenGroups={hiddenGroups} onToggle={toggleGroup} />
           <div className="search-wrap">
@@ -876,8 +986,12 @@ function App() {
               </tr>
               <tr>
                 {visibleScrollCols.map(col => (
-                  <th key={col.key} onClick={() => handleSort(col.key)} className={sortKey === col.key ? "sorted" : ""}>
-                    {col.label}{sortArrow(col.key)}
+                  <th key={col.key} onClick={() => handleSort(col.key)}
+                      className={sortKey === col.key ? "sorted" : ""}
+                      title={col.hist ? HIST_TITLES[col.hist] : undefined}>
+                    {col.label}
+                    {col.hist && <span className="col-lb">{lbShort}</span>}
+                    {sortArrow(col.key)}
                   </th>
                 ))}
               </tr>

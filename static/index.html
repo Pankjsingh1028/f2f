@@ -92,6 +92,13 @@ body {
 
 .topbar-stat span { color: var(--text-secondary); font-weight: 500; }
 
+/* position in the running expiry cycle — same number the chart's x-axis uses */
+.topbar-stats .cycle-stat { cursor: help; }
+.topbar-stats .cycle-stat span {
+  color: var(--amber-text);
+  font-weight: 600;
+}
+
 .topbar-dot {
   width: 7px; height: 7px;
   border-radius: 50%;
@@ -293,6 +300,31 @@ td.pctile-cell { color: var(--text-muted); font-weight: 600; }
 td.pctile-hi { color: var(--amber-text); background: rgba(251, 191, 36, 0.12); }   /* spread unusually wide  */
 td.pctile-lo { color: var(--cyan-text);  background: rgba(56, 189, 248, 0.12); }   /* spread unusually narrow */
 
+/* ── HISTORICAL STAT CELLS (avg / high / low over the lookback window) ──
+   Tinted text only, no fill: they are reference values, so they must not
+   out-shout the live spread cells sitting beside them. */
+td.hist-cell { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+td.hist-avg { color: var(--text-secondary); }
+td.hist-hi { color: var(--green-text); opacity: 0.85; }
+td.hist-lo { color: var(--red-text); opacity: 0.85; }
+/* AL is still an average, so it carries Avg's colour — the two read as a pair,
+   the second being the low point of the same curve. */
+td.hist-avglo { color: var(--text-secondary); }
+/* ALD is a cycle day, not a price — amber ties it to the "Day of expiry" header
+   and the chart's Today marker, which is what you read it against. */
+td.hist-ald { color: var(--amber-text); font-weight: 600; }
+
+/* lookback tag inside the Avg/High/Low headers, e.g. "AVG 6M" */
+thead th .col-lb {
+  margin-left: 4px;
+  padding: 1px 3px;
+  border-radius: 3px;
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  font-size: 8px;
+  letter-spacing: 0.4px;
+}
+
 /* ── WATCHLIST STAR ── */
 .star-btn {
   pointer-events: auto;
@@ -325,6 +357,24 @@ td.pctile-lo { color: var(--cyan-text);  background: rgba(56, 189, 248, 0.12); }
 }
 .minspread-input::-webkit-outer-spin-button,
 .minspread-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
+/* ── TOPBAR: historical lookback picker ── */
+.lookback-wrap {
+  display: flex; align-items: center; gap: 5px;
+  padding: 0 4px 0 8px; height: 31px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-muted); font-size: 11px; white-space: nowrap;
+}
+.lookback-select {
+  background: none; border: none; outline: none;
+  color: var(--text-primary);
+  font-family: var(--font-mono); font-size: 12px;
+  cursor: pointer;
+}
+/* native option lists don't inherit the dark theme on most platforms */
+.lookback-select option { background: var(--bg-elevated); color: var(--text-primary); }
 
 /* ── TOPBAR: active toggle state (shared with export btn) ── */
 .btn-export.active {
@@ -438,6 +488,18 @@ td.pctile-lo { color: var(--cyan-text);  background: rgba(56, 189, 248, 0.12); }
   color: var(--text-primary); letter-spacing: -0.2px;
 }
 .modal-sub { font-size: 1em; color: var(--text-muted); }
+/* Day-of-expiry chip. Amber deliberately matches the chart's Today marker, so
+   the chip and the line it points at read as the same thing. */
+.cycle-chip {
+  display: inline-flex; align-items: center; gap: 0.35em;
+  padding: 0.2em 0.65em;
+  background: rgba(251, 191, 36, 0.1);
+  border: 1px solid rgba(251, 191, 36, 0.32);
+  border-radius: 999px;
+  color: var(--text-secondary); font-size: 0.92em;
+  white-space: nowrap; cursor: help;
+}
+.cycle-chip b { color: var(--amber-text); font-weight: 600; }
 .modal-controls { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 0.6em; font-size: var(--ms); }
 .seg { display: flex; background: var(--bg-primary); border: 1px solid var(--border-subtle); border-radius: 7px; padding: 2px; }
 .seg-btn {
