@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MWPL Utilisation</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1: #fcfcfb;
+    --plane: #f9f9f7;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --baseline: #c3c2b7;
+    --border: rgba(11,11,11,0.10);
+    --track: #efeee9;
+    /* status palette — fixed, never themed */
+    --good: #0ca30c;
+    --warning: #fab219;
+    --serious: #ec835a;
+    --critical: #d03b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-1: #1a1a19;
+      --plane: #0d0d0d;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --muted: #898781;
+      --grid: #2c2c2a;
+      --baseline: #383835;
+      --border: rgba(255,255,255,0.10);
+      --track: #2c2c2a;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --plane: #0d0d0d;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --muted: #898781;
+    --grid: #2c2c2a;
+    --baseline: #383835;
+    --border: rgba(255,255,255,0.10);
+    --track: #2c2c2a;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--plane); color: var(--text-primary);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 1500px; margin: 0 auto; padding: 20px 16px 60px; }
+
+  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+  h1 { font-size: 19px; font-weight: 650; margin: 0; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 12.5px; }
+
+  .banner {
+    margin: 12px 0; padding: 9px 12px; border-radius: 8px; font-size: 12.5px;
+    border: 1px solid var(--border); background: var(--surface-1);
+    color: var(--text-secondary); display: flex; gap: 8px; align-items: flex-start;
+  }
+  .banner.warn { border-left: 3px solid var(--warning); }
+  .banner.err  { border-left: 3px solid var(--critical); }
+
+  /* KPI row */
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 14px 0 18px; }
+  .kpi { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+  .kpi .label { font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.045em; }
+  .kpi .value { font-size: 25px; font-weight: 620; margin-top: 3px; letter-spacing: -0.02em; }
+  .kpi .value small { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
+
+  /* filters — one row above the data */
+  .filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+  input[type=search], select {
+    font: inherit; font-size: 13px; padding: 6px 10px; border-radius: 7px;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary);
+  }
+  input[type=search] { min-width: 190px; }
+  .spacer { flex: 1; }
+  .ghost {
+    font: inherit; font-size: 12.5px; padding: 6px 10px; border-radius: 7px; cursor: pointer;
+    border: 1px solid var(--border); background: transparent; color: var(--text-secondary);
+  }
+  .ghost:hover { background: var(--surface-1); }
+
+  /* table */
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; min-width: 1080px; }
+  th, td { padding: 7px 11px; text-align: right; white-space: nowrap; }
+  th {
+    position: sticky; top: 0; z-index: 1; background: var(--surface-1);
+    font-size: 11px; font-weight: 600; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.04em;
+    border-bottom: 1px solid var(--baseline); cursor: pointer; user-select: none;
+  }
+  th:hover { color: var(--text-primary); }
+  th.sorted::after { content: " ▾"; }
+  th.sorted.asc::after { content: " ▴"; }
+  td { border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; }
+  tbody tr:hover { background: var(--plane); }
+  .sym { text-align: left; font-weight: 600; letter-spacing: -0.005em; }
+  .dim { color: var(--muted); }
+
+  /* utilisation meter: thin mark, rounded data-end, anchored to a baseline */
+  .meter { display: flex; align-items: center; gap: 9px; justify-content: flex-end; }
+  .track { position: relative; width: 108px; height: 7px; background: var(--track); border-radius: 4px; overflow: hidden; }
+  .fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 0 4px 4px 0; }
+  .tick { position: absolute; top: -2px; bottom: -2px; width: 1px; background: var(--baseline); }
+  .pct { min-width: 52px; text-align: right; font-variant-numeric: tabular-nums; }
+
+  /* status: icon + label, never colour alone */
+  .status { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 550; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .s-good    { color: var(--good); }
+  .s-warning { color: #8a6100; }
+  .s-serious { color: #a8462a; }
+  .s-critical{ color: var(--critical); }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .s-warning { color: var(--warning); }
+    :root:not([data-theme="light"]) .s-serious { color: var(--serious); }
+  }
+  :root[data-theme="dark"] .s-warning { color: var(--warning); }
+  :root[data-theme="dark"] .s-serious { color: var(--serious); }
+
+  .up { color: var(--critical); } .down { color: var(--good); }
+  footer { margin-top: 14px; color: var(--muted); font-size: 11.5px; line-height: 1.7; }
+  code { font-size: 11.5px; background: var(--surface-1); padding: 1px 5px; border-radius: 4px; border: 1px solid var(--border); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>MWPL Utilisation</h1>
+    <span class="sub" id="meta">loading…</span>
+  </header>
+
+  <div id="banners"></div>
+
+  <div class="kpis" id="kpis"></div>
+
+  <div class="filters">
+    <input type="search" id="q" placeholder="Filter symbol…" autocomplete="off">
+    <select id="band">
+      <option value="all">All bands</option>
+      <option value="ban">In ban</option>
+      <option value="95">≥ 95% (ban trigger)</option>
+      <option value="80">≥ 80% (ban exit floor)</option>
+      <option value="60">≥ 60%</option>
+      <option value="nolimit">No MWPL on file</option>
+    </select>
+    <span class="spacer"></span>
+    <button class="ghost" id="csv">Export CSV</button>
+  </div>
+
+  <div class="card">
+    <table>
+      <thead><tr>
+        <th class="sym" data-k="sym" style="text-align:left">Symbol</th>
+        <th data-k="spot">Spot</th>
+        <th data-k="mwpl">MWPL</th>
+        <th data-k="futOI">Fut OI</th>
+        <th data-k="optOI">Opt OI</th>
+        <th data-k="rawOI">Raw OI</th>
+        <th data-k="futEq">Fut-Eq OI</th>
+        <th data-k="util" class="sorted">Utilisation</th>
+        <th data-k="drift">vs NSE</th>
+        <th data-k="headroom">Headroom</th>
+        <th data-k="pcr">PCR</th>
+        <th data-k="banned" style="text-align:left">Status</th>
+      </tr></thead>
+      <tbody id="tb"></tbody>
+    </table>
+  </div>
+
+  <footer id="foot"></footer>
+</div>
+
+<script>
+const fmt = n => n == null ? "—" : n.toLocaleString("en-IN", {maximumFractionDigits: 0});
+const f2  = n => n == null ? "—" : n.toFixed(2);
+let DATA = null, sortK = "util", sortAsc = false;
+
+function band(r) {
+  if (r.util == null) return {cls: "s-good", var: "--muted", label: "no limit", icon: "○"};
+  if (r.banned)       return {cls: "s-critical", var: "--critical", label: "in ban", icon: "■"};
+  if (r.util >= 95)   return {cls: "s-critical", var: "--critical", label: "ban trigger", icon: "▲"};
+  if (r.util >= 80)   return {cls: "s-serious", var: "--serious", label: "near ban", icon: "▲"};
+  if (r.util >= 60)   return {cls: "s-warning", var: "--warning", label: "elevated", icon: "◆"};
+  return {cls: "s-good", var: "--good", label: "safe", icon: "●"};
+}
+
+function render() {
+  if (!DATA) return;
+  const j = DATA;
+  document.getElementById("meta").textContent =
+    `${j.rows.length} symbols · sweep ${j.ts ?? "—"} (${j.sweep_ms ?? "—"} ms) · every ${j.intervalSec}s · ` +
+    `${j.expiries.join(", ")} · Δ-mode ${j.deltaMode} · MWPL file ${j.mwplDate ?? "none"}`;
+
+  // banners
+  const b = [];
+  if (j.stale) b.push(`<div class="banner warn"><span>⚠</span><span>${j.stale}</span></div>`);
+  if (j.expiries.length === 1)
+    b.push(`<div class="banner warn"><span>⚠</span><span>Near expiry only — NSE counts every expiry, so utilisation here runs roughly 10–15% below the official figure. Widen <code>EXPIRIES</code> in mwpl.py to match NSE exactly.</span></div>`);
+  if (j.errors?.length)
+    b.push(`<div class="banner err"><span>✕</span><span>${j.errors.length} fetch error(s) this sweep — ${j.errors.slice(0,3).join(" · ")}${j.errors.length>3?" …":""}</span></div>`);
+  document.getElementById("banners").innerHTML = b.join("");
+
+  // KPIs
+  const withLimit = j.rows.filter(r => r.util != null);
+  const nBan  = j.rows.filter(r => r.banned).length;
+  const n95   = withLimit.filter(r => r.util >= 95).length;
+  const n80   = withLimit.filter(r => r.util >= 80).length;
+  const noLim = j.rows.filter(r => r.noLimit).length;
+  const top   = withLimit.length ? withLimit.reduce((a, r) => r.util > a.util ? r : a) : null;
+  document.getElementById("kpis").innerHTML = [
+    ["Tracked", `${j.rows.length} <small>/ ${withLimit.length} with MWPL</small>`],
+    ["In ban", `${nBan}`],
+    ["≥ 95%", `${n95}`],
+    ["≥ 80%", `${n80}`],
+    ["Highest", top ? `${top.util.toFixed(1)}% <small>${top.sym}</small>` : "—"],
+    ["No MWPL on file", `${noLim}`],
+  ].map(([l, v]) => `<div class="kpi"><div class="label">${l}</div><div class="value">${v}</div></div>`).join("");
+
+  // filter + sort
+  const q = document.getElementById("q").value.trim().toUpperCase();
+  const bf = document.getElementById("band").value;
+  let rows = j.rows.filter(r => !q || r.sym.includes(q));
+  if (bf === "ban")     rows = rows.filter(r => r.banned);
+  else if (bf === "nolimit") rows = rows.filter(r => r.noLimit);
+  else if (bf !== "all")     rows = rows.filter(r => r.util != null && r.util >= +bf);
+
+  rows.sort((a, x) => {
+    let p = a[sortK], q2 = x[sortK];
+    if (typeof p === "string") return sortAsc ? p.localeCompare(q2) : q2.localeCompare(p);
+    p = p ?? -Infinity; q2 = q2 ?? -Infinity;
+    return sortAsc ? p - q2 : q2 - p;
+  });
+
+  document.getElementById("tb").innerHTML = rows.map(r => {
+    const s = band(r);
+    const w = r.util == null ? 0 : Math.min(100, r.util);
+    const meter = r.util == null ? `<span class="dim">—</span>` : `
+      <div class="meter">
+        <div class="track">
+          <div class="fill" style="width:${w}%;background:var(${s.var})"></div>
+          <div class="tick" style="left:80%"></div><div class="tick" style="left:95%"></div>
+        </div><span class="pct">${r.util.toFixed(1)}%</span>
+      </div>`;
+    const drift = r.drift == null ? `<span class="dim">—</span>`
+      : `<span class="${r.drift >= 0 ? "up" : "down"}">${r.drift >= 0 ? "+" : ""}${f2(r.drift)}pp</span>`;
+    return `<tr title="${r.sym} — fut-eq ${fmt(r.futEq)} of MWPL ${fmt(r.mwpl)}">
+      <td class="sym">${r.sym}</td><td>${r.spot == null ? "—" : f2(r.spot)}</td>
+      <td class="dim">${fmt(r.mwpl)}</td><td>${fmt(r.futOI)}</td><td>${fmt(r.optOI)}</td>
+      <td class="dim">${fmt(r.rawOI)}</td><td>${fmt(r.futEq)}</td>
+      <td>${meter}</td><td>${drift}</td><td>${fmt(r.headroom)}</td><td>${r.pcr == null ? "—" : r.pcr.toFixed(2)}</td>
+      <td style="text-align:left"><span class="status ${s.cls}"><span class="dot" style="background:var(${s.var})"></span>${s.icon} ${s.label}</span></td>
+    </tr>`;
+  }).join("") || `<tr><td colspan="12" class="dim" style="text-align:center;padding:26px">No symbols match.</td></tr>`;
+
+  document.getElementById("foot").innerHTML =
+    `Utilisation = future-equivalent OI ÷ MWPL. Fut-eq OI = near futures OI + Σ(option OI × |delta|); Upstox reports OI in shares.<br>` +
+    `NSE bans fresh positions at ≥ ${j.banEnter}% and lifts only once utilisation falls below ${j.banExit}% — ticks on each meter mark both thresholds. ` +
+    `“vs NSE” is drift from the baseline in combineoi.csv (${j.mwplDate ?? "n/a"}).`;
+}
+
+document.querySelectorAll("th[data-k]").forEach(th => th.onclick = () => {
+  const k = th.dataset.k;
+  if (k === sortK) sortAsc = !sortAsc; else { sortK = k; sortAsc = false; }
+  document.querySelectorAll("th").forEach(x => x.classList.remove("sorted", "asc"));
+  th.classList.add("sorted"); if (sortAsc) th.classList.add("asc");
+  render();
+});
+document.getElementById("q").oninput = render;
+document.getElementById("band").onchange = render;
+document.getElementById("csv").onclick = () => {
+  if (!DATA) return;
+  const cols = ["sym","mwpl","futOI","optOI","rawOI","futEq","util","baseUtil","drift","headroom","pcr","spot","banned"];
+  const csv = [cols.join(",")].concat(DATA.rows.map(r => cols.map(c => r[c] ?? "").join(","))).join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], {type: "text/csv"}));
+  a.download = `mwpl_${new Date().toISOString().slice(0,10)}.csv`; a.click();
+};
+
+async function poll() {
+  try {
+    const r = await fetch("/api/mwpl");
+    DATA = await r.json();
+    render();
+  } catch (e) { console.error(e); }
+}
+poll();
+setInterval(poll, 15000);
+</script>
+</body>
+</html>
