@@ -15,14 +15,42 @@ stays banned until utilisation falls back below 80%. SAIL and SAMMAANCAP sit in
 the sample file at 92.7% / 90.7% and are still flagged "No Fresh Positions",
 which is what pins the hysteresis down.
 
-    futEqOI = sum(near futures OI) + sum(option OI * |delta|)
+Despite the column's name, that published figure tracks the FUTURES open
+interest, not a delta-weighted total. Measured live against the 10-SEP-2026
+file across all 208 comparable symbols, with each symbol's legs scaled back by
+its own one-session drift (our total OI / NSE's total OI, median 1.0036):
+
+    NSE futEq / futures OI      median 1.0345   p10 0.9963   p90 1.0902
+
+    formula                      bias   |err| med   |err| p90   within 5pp
+    futures only                -0.99        0.95        2.75         98%
+    futures + signed options    -2.23        2.05        6.65         84%
+    futures + abs options       +6.84        5.58       13.72         45%
+
+Errors are percentage points of MWPL. Adding a delta-weighted option leg in
+either sign convention makes the match WORSE, so this module measures
+utilisation on the futures leg by default (FUTEQ_MODE).
+
+The option book is not literally ignored by NSE - the implied contribution is
+about +5% of option OI (p10 -0.3%, p90 +10.2%) - but that is far below what
+either convention produces: our own chains weigh in at -7.8% of option OI
+signed and +33.8% absolute. The exact treatment is not recoverable from this
+file, and a fitted constant (futures + 0.0339 * optionOI, |err| med 0.54) buys
+0.4pp from a free parameter, so it is documented here rather than shipped.
+
+Absolute delta, the original default, overstated every one of the 208 symbols
+and is what made IREDA read 95% against NSE's 81.7%.
+
+Every expiry counts, futures as well as options - for IREDA the far months
+hold 17% of futures OI and 8% of option OI.
 
 OI from Upstox is already in SHARES for both futures and options (verified:
 every value divides by the contract lot size), so no lot multiplication.
 
-Cost per sweep: 1 batched market-quote call for all futures + 1 option/chain
-call per symbol (~209 total). Upstox standard-API budget is 2000/30min, so the
-floor is ~190s; POLL_INTERVAL_SEC defaults to 240s for headroom.
+Cost per sweep: 2 batched market-quote calls for all futures (~633 keys) + 1
+option/chain call per symbol per expiry (~633 total). Upstox standard-API
+budget is 2000/30min, so the floor is ~570s; POLL_INTERVAL_SEC defaults to 600s.
+Both option legs come out of the same pass, so FUTEQ_MODE is free to change.
 
 Run:
   1. Download the latest combineoi.csv from NSE into the repo root
@@ -56,17 +84,25 @@ COMBINEOI_CSV    = "combineoi.csv"
 OPTION_CHAIN_URL = "https://api.upstox.com/v2/option/chain"
 MARKET_QUOTE_URL = "https://api.upstox.com/v2/market-quote/quotes"
 
-# Expiries folded into the OI total. NSE counts every expiry; near-only runs at
-# roughly 85% of the true figure (RELIANCE: 198.2M of 231.3M raw OI), so this
-# understates utilisation. Widen to ("current_month","next_month","far_month")
-# to match NSE exactly — cost is one extra API call per symbol per expiry.
-EXPIRIES = ("current_month",)
+# Expiries folded into the OI total, for futures as well as options. NSE counts
+# every one. Narrowing this saves an option/chain call per symbol per expiry
+# dropped, at the cost of understating utilisation.
+EXPIRIES = ("current_month", "next_month", "far_month")
 
-# "abs"    — options contribute |delta| (gross exposure). NSE's standard.
-# "signed" — puts net against calls. Kept switchable; abs is the default.
-DELTA_MODE = "abs"
+# Which legs build the future-equivalent OI that utilisation is measured on.
+# See the module docstring for the 208-symbol reconciliation behind the default.
+#
+# "futures" — futures OI alone. Reproduces NSE's published column to ~1pp of
+#             MWPL (98% of symbols within 5pp) and is the only mode that agrees
+#             with every one of NSE's five ban flags without a false positive.
+# "signed"  — futures + sum(option OI * delta), puts netting against calls.
+# "abs"     — futures + sum(option OI * |delta|). Overstates every symbol.
+#
+# Both option legs are fetched and reported either way (optDelta / optDeltaAbs),
+# so this switch only decides which one feeds utilisation.
+FUTEQ_MODE = "futures"
 
-POLL_INTERVAL_SEC = 240      # >= ~190s to stay inside 2000 req / 30 min
+POLL_INTERVAL_SEC = 600      # >= ~570s at 3 expiries to stay inside 2000/30min
 REQ_PER_SEC       = 8        # per-second throttle (API cap is 50/s)
 WORKERS           = 8
 BAN_ENTER_PCT     = 95.0
@@ -151,17 +187,19 @@ def load_universe():
     uni = {}
     for s in sorted(syms):
         if s in futs and s in ukey:
-            uni[s] = {"fut": min(futs[s])[1], "ukey": ukey[s]}
+            # Every futures expiry, nearest first. Narrowing EXPIRIES trims the
+            # option legs only; NSE counts all futures months regardless.
+            uni[s] = {"futs": [k for _, k in sorted(futs[s])], "ukey": ukey[s]}
     return uni
 
 
 # ── FETCH ──
 def fetch_futures_oi(uni):
-    """All near futures in one batched call (208 keys, well under the ~490 cap).
-    -> {symbol: oi}"""
-    by_key = {v["fut"]: s for s, v in uni.items()}
+    """Every futures expiry, batched 490 keys at a time (~627 keys total).
+    -> ({symbol: summed oi}, [instrument keys the API never returned])"""
+    by_key = {k: s for s, v in uni.items() for k in v["futs"]}
     keys = list(by_key)
-    out = {}
+    out, seen = collections.defaultdict(float), set()
     for i in range(0, len(keys), 490):
         batch = keys[i:i + 490]
         limiter.acquire()
@@ -173,14 +211,19 @@ def fetch_futures_oi(uni):
             # sent, so map back through the token embedded in instrument_token.
             ik = q.get("instrument_token")
             if ik in by_key:
-                out[by_key[ik]] = safe_float(q.get("oi")) or 0.0
-    return out
+                out[by_key[ik]] += safe_float(q.get("oi")) or 0.0
+                seen.add(ik)
+    # A contract the API skipped would otherwise read as a genuine zero and
+    # silently understate utilisation, so hand the gap back to the caller.
+    return dict(out), [k for k in keys if k not in seen]
 
 
 def fetch_option_oi(sym, ukey):
-    """Sum OI and delta-weighted OI across every strike of the configured
-    expiries. -> (rawOI, futEqOI, spot, callOI, putOI)"""
-    raw = fq = call_oi = put_oi = 0.0
+    """Sum OI and BOTH delta-weighted option legs across every strike of the
+    configured expiries. One pass yields both conventions, so FUTEQ_MODE can
+    change without costing another call.
+    -> (rawOI, signedDeltaOI, absDeltaOI, spot, callOI, putOI, oiMissingDelta)"""
+    raw = sgn = ab = call_oi = put_oi = nodelta = 0.0
     spot = None
     for kw in EXPIRIES:
         limiter.acquire()
@@ -193,14 +236,20 @@ def fetch_option_oi(sym, ukey):
             for side in ("call_options", "put_options"):
                 o = row.get(side) or {}
                 oi = safe_float((o.get("market_data") or {}).get("oi")) or 0.0
-                dl = safe_float((o.get("option_greeks") or {}).get("delta")) or 0.0
+                dl = safe_float((o.get("option_greeks") or {}).get("delta"))
+                if not dl:
+                    # Drops out of futEq while its OI still lands in rawOI -
+                    # track the shares so the gap is visible, not silent.
+                    nodelta += oi
+                    dl = 0.0
                 raw += oi
-                fq += oi * (abs(dl) if DELTA_MODE == "abs" else dl)
+                sgn += oi * dl
+                ab += oi * abs(dl)
                 if side == "call_options":
                     call_oi += oi
                 else:
                     put_oi += oi
-    return raw, fq, spot, call_oi, put_oi
+    return raw, sgn, ab, spot, call_oi, put_oi, nodelta
 
 
 # ── SWEEP ──
@@ -208,32 +257,38 @@ def sweep():
     t0 = time.time()
     errors = []
     try:
-        fut_oi = fetch_futures_oi(universe)
+        fut_oi, fut_missing = fetch_futures_oi(universe)
+        if fut_missing:
+            errors.append(f"futures: no quote for {len(fut_missing)} contract(s) "
+                          f"({', '.join(fut_missing[:5])}) — counted as 0 OI")
     except Exception as e:
         fut_oi = {}
         errors.append(f"futures: {e}")
 
     def one(sym):
         try:
-            raw, fq, spot, c, p = fetch_option_oi(sym, universe[sym]["ukey"])
-            return sym, raw, fq, spot, c, p, None
+            raw, sgn, ab, spot, c, p, nd = fetch_option_oi(sym, universe[sym]["ukey"])
+            return sym, raw, sgn, ab, spot, c, p, nd, None
         except Exception as e:
-            return sym, 0.0, 0.0, None, 0.0, 0.0, str(e)
+            return sym, 0.0, 0.0, 0.0, None, 0.0, 0.0, 0.0, str(e)
 
     with ThreadPoolExecutor(max_workers=WORKERS) as ex:
         results = list(ex.map(one, universe))
 
     rows = []
-    for sym, raw, fq, spot, c, p, err in results:
+    for sym, raw, sgn, ab, spot, c, p, nd, err in results:
         if err:
             errors.append(f"{sym}: {err}")
         f_oi = fut_oi.get(sym, 0.0)
         raw_total = raw + f_oi
-        futeq = fq + f_oi                     # futures carry delta 1 by definition
+        # Futures carry delta 1 by definition; the option leg is whatever
+        # FUTEQ_MODE selects, and "futures" is NSE's own published basis.
+        futeq = f_oi + {"signed": sgn, "abs": ab}.get(FUTEQ_MODE, 0.0)
         lim = mwpl_map.get(sym) or {}
         m = lim.get("mwpl")
+        nse_fq = lim.get("nseFutEq")
         util = round(futeq / m * 100, 2) if m else None
-        base = round(lim["nseFutEq"] / m * 100, 2) if m and lim.get("nseFutEq") else None
+        base = round(nse_fq / m * 100, 2) if m and nse_fq is not None else None
         rows.append({
             "sym": sym,
             "mwpl": m,
@@ -241,16 +296,21 @@ def sweep():
             "optOI": round(raw),
             "rawOI": round(raw_total),
             "futEq": round(futeq),
+            # Both option legs, reported regardless of which one feeds futEq.
+            "optDelta": round(sgn),
+            "optDeltaAbs": round(ab),
             "util": util,
             "baseUtil": base,
             "drift": round(util - base, 2) if (util is not None and base is not None) else None,
             # Shares of fresh future-equivalent exposure before the 95% trip.
             "headroom": round(0.95 * m - futeq) if m else None,
             "pcr": round(p / c, 3) if c else None,
+            # Option OI the greeks endpoint gave no delta for: in rawOI, not futEq.
+            "noDeltaOI": round(nd),
             "spot": spot,
             # Live crossing vs NSE's last published ban state. Hysteresis means a
             # name already in ban stays in ban until it comes back under 80%.
-            "banned": bool(lim.get("banned")) if util is None else (
+            "banned": bool(lim.get("banned")) if util is None else bool(
                 util >= BAN_ENTER_PCT or (lim.get("banned") and util >= BAN_EXIT_PCT)),
             "nseBanned": bool(lim.get("banned")),
             "noLimit": m is None,
@@ -311,7 +371,7 @@ def api_mwpl():
         "mwplDate": mwpl_date,
         "stale": _stale,
         "expiries": list(EXPIRIES),
-        "deltaMode": DELTA_MODE,
+        "futEqMode": FUTEQ_MODE,
         "intervalSec": POLL_INTERVAL_SEC,
         "banEnter": BAN_ENTER_PCT,
         "banExit": BAN_EXIT_PCT,

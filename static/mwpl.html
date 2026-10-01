@@ -200,13 +200,18 @@ function render() {
   const j = DATA;
   document.getElementById("meta").textContent =
     `${j.rows.length} symbols · sweep ${j.ts ?? "—"} (${j.sweep_ms ?? "—"} ms) · every ${j.intervalSec}s · ` +
-    `${j.expiries.join(", ")} · Δ-mode ${j.deltaMode} · MWPL file ${j.mwplDate ?? "none"}`;
+    `${j.expiries.join(", ")} · fut-eq ${j.futEqMode} · MWPL file ${j.mwplDate ?? "none"}`;
 
   // banners
   const b = [];
   if (j.stale) b.push(`<div class="banner warn"><span>⚠</span><span>${j.stale}</span></div>`);
-  if (j.expiries.length === 1)
-    b.push(`<div class="banner warn"><span>⚠</span><span>Near expiry only — NSE counts every expiry, so utilisation here runs roughly 10–15% below the official figure. Widen <code>EXPIRIES</code> in mwpl.py to match NSE exactly.</span></div>`);
+  if (j.expiries.length < 3)
+    b.push(`<div class="banner warn"><span>⚠</span><span>Only ${j.expiries.length} option expiry/expiries counted — NSE counts every one, so utilisation here runs below the official figure. Set <code>EXPIRIES</code> in mwpl.py to all three to match NSE.</span></div>`);
+  if (j.futEqMode !== "futures")
+    b.push(`<div class="banner warn"><span>⚠</span><span>Fut-eq mode <code>${j.futEqMode}</code> — NSE's published column tracks the futures leg alone (208 symbols, median error 0.95pp of MWPL). A delta-weighted option leg fits worse either way: signed −2.23pp bias, absolute +6.84pp. Set <code>FUTEQ_MODE = "futures"</code> to match NSE.</span></div>`);
+  const nd = j.rows.reduce((a, r) => a + (r.noDeltaOI || 0), 0);
+  if (nd > 0)
+    b.push(`<div class="banner warn"><span>⚠</span><span>${nd.toLocaleString()} shares of option OI came back without a delta — counted in raw OI but not in fut-eq, so utilisation is understated for those names.</span></div>`);
   if (j.errors?.length)
     b.push(`<div class="banner err"><span>✕</span><span>${j.errors.length} fetch error(s) this sweep — ${j.errors.slice(0,3).join(" · ")}${j.errors.length>3?" …":""}</span></div>`);
   document.getElementById("banners").innerHTML = b.join("");
@@ -280,7 +285,7 @@ document.getElementById("q").oninput = render;
 document.getElementById("band").onchange = render;
 document.getElementById("csv").onclick = () => {
   if (!DATA) return;
-  const cols = ["sym","mwpl","futOI","optOI","rawOI","futEq","util","baseUtil","drift","headroom","pcr","spot","banned"];
+  const cols = ["sym","mwpl","futOI","optOI","rawOI","futEq","optDelta","optDeltaAbs","util","baseUtil","drift","headroom","pcr","spot","noDeltaOI","banned"];
   const csv = [cols.join(",")].concat(DATA.rows.map(r => cols.map(c => r[c] ?? "").join(","))).join("\n");
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([csv], {type: "text/csv"}));
