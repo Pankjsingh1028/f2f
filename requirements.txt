@@ -1,7 +1,10 @@
-dash
+flask
+gunicorn
 pandas
 python-dotenv
 requests
 upstox-client
-gunicorn
-
+protobuf
+pyotp
+pytz
+playwright
