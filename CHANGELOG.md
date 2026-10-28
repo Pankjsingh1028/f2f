@@ -2,6 +2,22 @@
 
 ## 2026-10-28
 
+### Added: `bhavcopy.py` downloads the bhavcopy history into `BHAVCOPY_DIR`
+
+- New `bhavcopy.py` fetches exchange bhavcopy files from a start date (default 2026-07-01) to today into
+  `BHAVCOPY_DIR` (`.env` or environment, default `C:\Users\AMAN\Desktop\bhavcopy`), the folder
+  `build_futures_close.py` reads. Files already in the folder are skipped, so it can be re-run any time.
+- Default is NSE F&O only (the file F2F uses). `--all` or `--segments` add NSE cash, BSE F&O and BSE cash.
+  `--from`, `--to` and `--dry-run` are also available.
+- Each download is checked to be the right file type and for the right trade date, and written atomically.
+  Weekdays with no file (holidays, or today before it is published) are listed, not treated as errors.
+  It stops after 5 errors in a row (blocked or offline).
+- Ran once for 2026-07-01 to 2026-10-28: 77 files saved. The folder now holds 82 NSE F&O files; the missing
+  weekdays are the holidays 14-Sep, 2-Oct and 20-Oct, and 28-Oct (not published yet at the time).
+- Nothing else changed: `futures_close.parquet` / `.csv` were not rebuilt; run `python build_futures_close.py`
+  to include the new days. No restart needed. Same file names as the downloader in ajira-rms, which keeps
+  saving each day's four files to the same folder.
+
 ### Changed: bhavcopy folder moved to `C:\Users\AMAN\Desktop\bhavcopy`
 
 - `build_futures_close.py` default `BHAVCOPY_DIR` changed from
