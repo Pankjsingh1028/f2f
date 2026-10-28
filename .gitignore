@@ -1,0 +1,17 @@
+# secrets
+probe_state.json
+
+# python / node
+venv/
+__pycache__/
+*.pyc
+node_modules/
+
+# generated daily data
+instruments.json
+instruments.json.gz
+instruments.csv
+oc-instru.csv
+futurestockslist.csv
+futurestockslist_isin.csv
+margin_charges_cache.csv
