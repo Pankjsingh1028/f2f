@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-10-28
+
+### Changed: bhavcopy folder moved to `C:\Users\AMAN\Desktop\bhavcopy`
+
+- `build_futures_close.py` default `BHAVCOPY_DIR` changed from
+  `C:\Users\ADMIN\Desktop\bhavcopy` to `C:\Users\AMAN\Desktop\bhavcopy`.
+  The `BHAVCOPY_DIR` env var still overrides it.
+- `build_future_spreads.py` needs no change: it reads `futures_close.csv`
+  from the repo folder, not the bhavcopy zips.
+
 ## 2026-09-11
 
 ### Fixed — `mwpl.py` utilisation was overstated; NSE measures it on the futures leg

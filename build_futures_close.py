@@ -48,7 +48,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 # Folder holding the daily bhavcopy zips (BhavCopy_NSE_FO_0_0_0_YYYYMMDD_F_0000.csv.zip).
 # Override with the BHAVCOPY_DIR env var if the zips move.
-BHAVCOPY_DIR = os.getenv("BHAVCOPY_DIR", r"C:\Users\ADMIN\Desktop\bhavcopy")
+BHAVCOPY_DIR = os.getenv("BHAVCOPY_DIR", r"C:\Users\AMAN\Desktop\bhavcopy")
 
 ZIP_GLOB = os.path.join(BHAVCOPY_DIR, "BhavCopy_NSE_FO_0_0_0_*_F_0000.csv.zip")
 OUT_PARQUET = os.path.join(HERE, "futures_close.parquet")
