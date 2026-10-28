@@ -90,7 +90,7 @@ def parse_zip(path):
             )
 
     df = df[df["FinInstrmTp"].isin(FUTURES_TYPES)].copy()
-    df.rename(columns=COLUMNS, inplace=True)
+    df = df.rename(columns=COLUMNS)
 
     # numeric coercion
     for col in ("close", "settle", "prev_close", "underlying",
@@ -161,7 +161,7 @@ def build(rebuild=False, limit=None):
         added = len(new)
         data = pd.concat([existing, new], ignore_index=True)
 
-    data.sort_values(["date", "symbol", "expiry"], inplace=True, ignore_index=True)
+    data = data.sort_values(["date", "symbol", "expiry"], ignore_index=True)
 
     data.to_parquet(OUT_PARQUET, index=False)
     data.to_csv(OUT_CSV, index=False)

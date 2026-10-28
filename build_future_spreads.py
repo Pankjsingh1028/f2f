@@ -71,7 +71,7 @@ def compute_rows(df):
         })
 
     out = pd.DataFrame(rows, columns=OUT_COLUMNS)
-    out.sort_values(["Trade Date", "Symbol"], inplace=True, ignore_index=True)
+    out = out.sort_values(["Trade Date", "Symbol"], ignore_index=True)
     return out
 
 

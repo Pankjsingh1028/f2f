@@ -2,6 +2,16 @@
 
 ## 2026-10-28
 
+### Fixed: pandas `inplace=True` deprecation warnings in the two build scripts
+
+- `build_futures_close.py` (the `rename` and `sort_values` calls) and `build_future_spreads.py` (`sort_values`)
+  used `inplace=True`, which pandas 3.1 warns about on every file parsed. They now assign the result instead.
+  Same output: a full rebuild in a scratch copy with warnings treated as errors ran clean, and its values
+  matched the existing `futures_close.parquet` and `future_spreads.csv` for every date except 2026-09-01.
+- 2026-09-01 is missing from the existing data (647 contract rows): the daily build only reads zips newer than
+  the latest date on file, so a day downloaded later is skipped. Not changed here.
+- No restart needed.
+
 ### Added: `bhavcopy.py` downloads the bhavcopy history into `BHAVCOPY_DIR`
 
 - New `bhavcopy.py` fetches exchange bhavcopy files from a start date (default 2026-07-01) to today into
