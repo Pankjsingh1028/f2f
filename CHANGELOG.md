@@ -2,6 +2,17 @@
 
 ## 2026-10-30
 
+### Added: Cash ↔ CE (ATM) yield group (buy spot, sell the ATM call)
+
+- New group after "Cash ↔ Fut": **Strike** (the call strike nearest the spot LTP), **CE** (that call's LTP) and
+  **Yield %** (CE LTP as a percentage of the spot LTP). Expiry is the near future's expiry (the monthly option).
+- The ATM strike follows the spot, so `f2fspread.py` does not put option strikes on the websocket. A background thread
+  (`start_ce_poller`) picks each symbol's ATM CE every 3 s and fetches those ~219 quotes in one REST batch; the
+  websocket stays at 870 keys. A failed poll is logged and retried after 30 s; the last good values stay until then.
+- Needs a restart of `f2fspread.py`; `static/app.js` is rebuilt. Checked live (read-only quotes): all 219 symbols got
+  a CE, endpoint parses as strict JSON (e.g. ABB 6400 CE at 265.55 on a 6417 spot is 4.14%). Premium moves every
+  3 s, not tick by tick. Not seen in the browser.
+
 ### Fixed: dashboard blank after the Cash ↔ Fut Charges column
 
 - `/api/spreads` contained a bare `NaN`, which is invalid JSON, so the page failed to load. Cause: NIFTYFPI has a blank

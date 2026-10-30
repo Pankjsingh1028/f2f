@@ -81,6 +81,18 @@ def build_futures_index(instruments):
         idx[sym] = futs[:3]
     return idx, lots, cash
 
+def build_ce_index(instruments):
+    """{underlying_symbol: {expiry_ms: [(strike, instrument_key), ...] sorted by strike}} for stock CE options."""
+    idx = {}
+    for inst in instruments:
+        if inst.get("segment") == "NSE_FO" and inst.get("instrument_type") == "CE":
+            sym, k, sp = inst.get("underlying_symbol"), inst.get("instrument_key"), inst.get("strike_price")
+            if sym and k and sp is not None:
+                idx.setdefault(sym, {}).setdefault(inst.get("expiry", 0), []).append((float(sp), k))
+    for by_exp in idx.values():
+        for lst in by_exp.values(): lst.sort()
+    return idx
+
 def load_underlyings():
     return pd.read_csv(STOCKS_CSV)["underlying_symbol"].dropna().unique().tolist()
 
@@ -300,6 +312,52 @@ def initial_rest_poll(keys):
         time.sleep(0.1)
     print(f"[{datetime.now()}] Poll done. {len(market_state)} instruments.")
 
+# ── ATM CALL (CE) POLLER ──
+# The ATM strike moves with the spot, so instead of subscribing a band of strikes per symbol
+# on the websocket, pick each symbol's ATM CE (near-future expiry) from the live spot and
+# fetch just those quotes over REST in one batch every CE_POLL_SECS.
+CE_POLL_SECS = 3
+ce_state = {}                                      # sym → {"strike", "ltp", "bid", "ask"}
+
+def atm_ce(sym, spot):
+    """(strike, key) of the CE nearest the spot, on the near future's expiry; ties go to the lower strike."""
+    futs = futures_index.get(sym)
+    strikes = ce_index.get(sym, {}).get(futs[0]["expiry"]) if futs else None
+    if not strikes or spot is None: return None
+    return min(strikes, key=lambda sk: (abs(sk[0] - spot), sk[0]))
+
+def poll_ce_once():
+    """One refresh of ce_state. Raises on HTTP/network failure so the loop can back off."""
+    global ce_state, _state_dirty
+    with market_state_lock: snap = dict(market_state)
+    picks = {}                                     # ce key → (sym, strike)
+    for sym in underlyings:
+        p = atm_ce(sym, (snap.get(cash_keys.get(sym)) or {}).get("ltp"))
+        if p: picks[p[1]] = (sym, p[0])
+    hdrs = {"Accept": "application/json", "Authorization": f"Bearer {ACCESS_TOKEN}"}
+    keys, new = list(picks), {}
+    for i in range(0, len(keys), 490):
+        resp = requests.get(f"{MARKET_QUOTE_URL}?instrument_key={','.join(keys[i:i+490])}", headers=hdrs, timeout=15)
+        resp.raise_for_status()
+        for ik_l, q in resp.json().get("data", {}).items():
+            pick = picks.get(q.get("instrument_token") or ik_l)
+            if not pick: continue
+            d = q.get("depth", {}); bd = d.get("buy", []); sd = d.get("sell", [])
+            new[pick[0]] = {"strike": pick[1], "ltp": safe_float(q.get("last_price")),
+                            "bid": safe_float(bd[0].get("price")) if bd else None,
+                            "ask": safe_float(sd[0].get("price")) if sd else None}
+    ce_state = new
+    _state_dirty = True
+
+def start_ce_poller():
+    def _run():
+        while True:
+            try:
+                poll_ce_once(); time.sleep(CE_POLL_SECS)
+            except Exception as e:
+                print(f"[{datetime.now()}] CE poll failed: {e}"); time.sleep(30)
+    threading.Thread(target=_run, daemon=True).start()
+
 # ── WEBSOCKET ──
 def on_message(msg):
     global _state_dirty
@@ -347,6 +405,9 @@ def build_records(snap):
         # LTP spreads: spread = near fut LTP − spot LTP; % is on the spot LTP.
         cLtp = cs.get("ltp"); cfs = diff(ns.get("ltp"), cLtp)
         cfr = round(cfs / cLtp * 100, 2) if (cfs is not None and cLtp) else None
+        # Cash ↔ CE: buy spot, sell the ATM call (near expiry). Yield = CE LTP as % of spot LTP.
+        ce = ce_state.get(sym) or {}; ceP = ce.get("ltp")
+        ceY = round(ceP / cLtp * 100, 2) if (ceP is not None and cLtp) else None
         # LTP spread = later.ltp − earlier.ltp (the mid-ish reference for each pair)
         lsNX, lsXF, lsNF = diff(xLtp, nLtp), diff(fLtp, xLtp), diff(fLtp, nLtp)
         # r* = LTP spread as % of the near LTP. No longer a table column — kept in
@@ -358,7 +419,7 @@ def build_records(snap):
         derived = {"lsNX": lsNX, "rNX": rpct(lsNX), "pNX": pctile(dd.get("nx"), lsNX),
                    "lsXF": lsXF, "rXF": rpct(lsXF), "pXF": pctile(dd.get("xf"), lsXF),
                    "lsNF": lsNF, "rNF": rpct(lsNF), "pNF": pctile(dd.get("nf"), lsNF)}
-        rows.append({"sym": sym, "lot": lot, "mgn": round(mg,2) if mg else None, "chg": round(ch/lot,2) if (ch and lot) else None, "coc": round(co/lot,2) if (co and lot) else None, "cLtp": cLtp, "cfS": cfs, "cfR": cfr, "cfC": round(cfc/lot,2) if (cfc and lot) else None, "nLtp": nLtp, "xLtp": xLtp, "fLtp": fLtp, **sp, **derived})
+        rows.append({"sym": sym, "lot": lot, "mgn": round(mg,2) if mg else None, "chg": round(ch/lot,2) if (ch and lot) else None, "coc": round(co/lot,2) if (co and lot) else None, "cLtp": cLtp, "cfS": cfs, "cfR": cfr, "cfC": round(cfc/lot,2) if (cfc and lot) else None, "ceK": ce.get("strike"), "ceP": ceP, "ceY": ceY, "nLtp": nLtp, "xLtp": xLtp, "fLtp": fLtp, **sp, **derived})
     return rows
 
 # ── INIT ──
@@ -367,7 +428,7 @@ _raw = load_instruments(); underlyings = load_underlyings(); margin_dict = load_
 spread_history = load_spread_history()
 annotate_cycle_days(spread_history)
 spread_dist = build_spread_dist(spread_history)
-futures_index, lot_sizes, cash_keys = build_futures_index(_raw); del _raw
+futures_index, lot_sizes, cash_keys = build_futures_index(_raw); ce_index = build_ce_index(_raw); del _raw
 subscribe_keys = list(dict.fromkeys(
     [f["instrument_key"] for s in underlyings for f in futures_index.get(s, [])]
     + [cash_keys[s] for s in underlyings if s in cash_keys]))
@@ -408,7 +469,7 @@ def api_spreads():
     return jsonify({"data": _last_cache, "ts": datetime.now().strftime("%H:%M:%S"), "live": len(snap), "cycle": cycle_info(), "cached": False})
 
 if __name__ == "__main__":
-    initial_rest_poll(subscribe_keys); start_websocket(subscribe_keys)
+    initial_rest_poll(subscribe_keys); start_websocket(subscribe_keys); start_ce_poller()
     os.makedirs("static", exist_ok=True)
     print(f"[{datetime.now()}] Dashboard → http://localhost:8081")
     app.run(host="0.0.0.0", port=8081, debug=False, threaded=True)
