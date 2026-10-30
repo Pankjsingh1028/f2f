@@ -7,9 +7,13 @@ const COLS = [
   { key: "mgn",  label: "Margin",  group: "info" },
   { key: "chg",  label: "Charges", group: "info" },
   { key: "coc",  label: "Interest",group: "info" },
+  { key: "cLtp", label: "Spot",    group: "ltp",       cellClass: "ltp-cell" },
   { key: "nLtp", label: "Near",    group: "ltp",       cellClass: "ltp-cell" },
   { key: "xLtp", label: "Next",    group: "ltp",       cellClass: "ltp-cell" },
   { key: "fLtp", label: "Far",     group: "ltp",       cellClass: "ltp-cell" },
+  { key: "cfS",  label: "Spread",  exp: "CashFut_Spread", group: "cash-fut",  spread: true },
+  { key: "cfR",  label: "%",       exp: "CashFut_Pct",    group: "cash-fut",  spread: true },
+  { key: "cfC",  label: "Charges", exp: "CashFut_Charges", group: "cash-fut" },
   { key: "lsNX", label: "LTP Spread", exp: "NearNext_LTP_Spread", group: "near-next", spread: true },
   { key: "sNX",  label: "Bid",        exp: "NearNext_Bid",        group: "near-next", spread: true },
   { key: "sXN",  label: "Ask",        exp: "NearNext_Ask",        group: "near-next", spread: true },
@@ -76,14 +80,15 @@ const SHOW_CHART_COL = true;
 
 const GROUP_META = {
   "info":      { label: "Info",      span: 4, cls: "col-group-info" },
-  "ltp":       { label: "Last price",span: 3, cls: "col-group-ltp" },
+  "ltp":       { label: "Last price",span: 4, cls: "col-group-ltp" },
+  "cash-fut":  { label: "Cash ↔ Fut", span: 3, cls: "col-group-cash-fut" },
   "near-next": { label: "Near ↔ Next", span: 9, cls: "col-group-near-next" },
   "next-far":  { label: "Next ↔ Far",  span: 9, cls: "col-group-next-far" },
   "near-far":  { label: "Near ↔ Far",  span: 9, cls: "col-group-near-far" },
 };
 
 // Ordered group list for the column-visibility menu (Symbol stays frozen/always on).
-const GROUP_ORDER = ["info", "ltp", "near-next", "next-far", "near-far"];
+const GROUP_ORDER = ["info", "ltp", "cash-fut", "near-next", "next-far", "near-far"];
 
 function fmt(v) {
   if (v == null || v === "") return "—";

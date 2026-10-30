@@ -91,6 +91,20 @@ def build_futures_index(instruments):
     return index, lot_sizes
 
 
+def build_cash_index(instruments):
+    """underlying_symbol → its NSE_EQ cash instrument key (the futures' underlying_key)."""
+    cash = {}
+    for inst in instruments:
+        if (
+            inst.get("segment") == "NSE_FO"
+            and inst.get("instrument_type") == "FUT"
+            and inst.get("underlying_symbol")
+            and inst.get("underlying_key")
+        ):
+            cash[inst["underlying_symbol"]] = inst["underlying_key"]
+    return cash
+
+
 # ──────────────────────────────────────────────
 # API CALLS
 # ──────────────────────────────────────────────
@@ -203,6 +217,25 @@ def fetch_spread_charges(near_key, next_key, lot_size, near_price, next_price):
     return c_fwd, c_rev
 
 
+def fetch_cash_future_charges(cash_key, near_key, lot_size, cash_price, near_price):
+    """Round-trip charges (ex-brokerage) for the cash-and-carry on the near future.
+
+    Entry: cash BUY (delivery) + near future SELL.  Exit: cash SELL + near future BUY.
+    Both legs are priced at LTP. The charges API leaves out DP charges on the cash sell.
+    """
+    legs = (
+        (cash_key, "BUY", cash_price), (near_key, "SELL", near_price),
+        (cash_key, "SELL", cash_price), (near_key, "BUY", near_price),
+    )
+    total = 0.0
+    for key, side, price in legs:
+        c = fetch_charges_ex_brokerage(key, lot_size, side, price)
+        if c is None:
+            return None          # a missing leg would understate the cost, so leave it blank
+        total += c
+    return round(total, 2)
+
+
 def calculate_carry_cost(margin, expiry_timestamp, roi=12.0):
     """Cost of carry = margin × (roi%) × (days_left / 365)."""
     if not margin or not expiry_timestamp:
@@ -218,7 +251,7 @@ def calculate_carry_cost(margin, expiry_timestamp, roi=12.0):
 # ──────────────────────────────────────────────
 # PROCESS ONE SYMBOL (called by workers)
 # ──────────────────────────────────────────────
-def process_symbol(sym, futures_index, lot_sizes, ltp_map):
+def process_symbol(sym, futures_index, lot_sizes, ltp_map, cash_index):
     """Fetch margin + charges for one symbol. Returns a dict or None."""
     futs = futures_index.get(sym, [])
     if len(futs) < 2:
@@ -236,6 +269,12 @@ def process_symbol(sym, futures_index, lot_sizes, ltp_map):
     time.sleep(RATE_LIMIT_DELAY)
     c_fwd, c_rev = fetch_spread_charges(near_key, nxt_key, lot_size, near_price, nxt_price)
     carry = calculate_carry_cost(margin_val, near.get("expiry"))
+    cash_key = cash_index.get(sym)
+    cf_charges = None
+    if cash_key:
+        time.sleep(RATE_LIMIT_DELAY)
+        cf_charges = fetch_cash_future_charges(cash_key, near_key, lot_size,
+                                               ltp_map.get(cash_key), near_price)
 
     result = {
         "Symbol": sym,
@@ -247,9 +286,10 @@ def process_symbol(sym, futures_index, lot_sizes, ltp_map):
         "Charges_r": c_rev,
         "Charges": round((c_fwd or 0) + (c_rev or 0), 2),
         "Cost_of_Carry": carry,
+        "CF_Charges": cf_charges,
     }
 
-    print(f"  [{sym}] Px={near_price}/{nxt_price} | Margin={margin_val} | Fwd={c_fwd} | Rev={c_rev} | Carry={carry}")
+    print(f"  [{sym}] Px={near_price}/{nxt_price} | Margin={margin_val} | Fwd={c_fwd} | Rev={c_rev} | Carry={carry} | CF={cf_charges}")
     return result
 
 
@@ -263,6 +303,7 @@ if __name__ == "__main__":
     instruments = load_instruments()
     underlyings = load_underlyings()
     futures_index, lot_sizes = build_futures_index(instruments)
+    cash_index = build_cash_index(instruments)
 
     # Pre-fetch LTPs for all near/next legs so brokerage charges are priced
     # correctly (value-based taxes need a real turnover, not price=0).
@@ -270,6 +311,8 @@ if __name__ == "__main__":
     for sym in underlyings:
         for f in futures_index.get(sym, [])[:2]:
             price_keys.append(f["instrument_key"])
+        if sym in cash_index:
+            price_keys.append(cash_index[sym])
     price_keys = list(dict.fromkeys(price_keys))
     print(f"[{datetime.now()}] Fetching LTPs for {len(price_keys)} legs...")
     ltp_map = fetch_all_ltps(price_keys)
@@ -286,7 +329,7 @@ if __name__ == "__main__":
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         future_to_sym = {
-            executor.submit(process_symbol, sym, futures_index, lot_sizes, ltp_map): sym
+            executor.submit(process_symbol, sym, futures_index, lot_sizes, ltp_map, cash_index): sym
             for sym in underlyings
         }
 

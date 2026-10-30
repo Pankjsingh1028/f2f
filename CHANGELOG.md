@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-10-30
+
+### Added: Cash ↔ Fut columns (cash buy, near future sell) before Near ↔ Next
+
+- New "Cash ↔ Fut" column group between "Last price" and "Near ↔ Next": **Spread** = near future LTP minus spot (cash)
+  LTP (buy spot, sell the future), and **%** = that spread as a percentage of the spot LTP.
+  "Last price" also gets a **Spot** (cash LTP) column, placed before Near. Near ↔ Next is unchanged (future to future).
+- `f2fspread.py` now also subscribes each underlying's `NSE_EQ` cash instrument (219 more keys, 870 in total) and
+  adds `cLtp`, `cfS`, `cfR` to `/api/spreads`. The CSV export includes the two new columns.
+- Third column **Charges**: round-trip statutory charges per share for the cash-and-carry (spot BUY + near fut SELL, then
+  spot SELL + near fut BUY), ex-brokerage, priced at LTP, from the Upstox charges API (spot leg as delivery). It comes
+  from a new `CF_Charges` column in `margin_charges_cache.csv`, written by `f2fcalc.py`, so **run `python f2fcalc.py`**
+  to fill it (blank until then). The API's total leaves out DP charges on the spot sell, so those are not included.
+  Interest/carry is not part of this group.
+- Needs a restart of `f2fspread.py`. `static/app.js` is already rebuilt from `frontend/src/app.jsx`.
+- Spread/% checked offline with made-up prices (spot LTP 100, future LTP 101 gives 1.00 and 1.00%; no quotes gives
+  blanks). Charges checked live for ABB only (2,233.25 per lot of 125, 17.87 per share); `f2fcalc.py` was not run in full.
+
 ## 2026-10-28
 
 ### Fixed: pandas `inplace=True` deprecation warnings in the two build scripts

@@ -63,18 +63,19 @@ def load_instruments():
     with open(INSTRUMENTS_JSON, "r") as f: return json.load(f)
 
 def build_futures_index(instruments):
-    raw, lots = {}, {}
+    raw, lots, cash = {}, {}, {}
     for inst in instruments:
         if inst.get("segment") == "NSE_FO" and inst.get("instrument_type") == "FUT":
             sym = inst.get("underlying_symbol")
             if sym:
                 raw.setdefault(sym, []).append({"instrument_key": inst["instrument_key"], "expiry": inst.get("expiry", 0), "trading_symbol": inst.get("trading_symbol")})
                 lots[inst["instrument_key"]] = inst.get("lot_size")
+                if inst.get("underlying_key"): cash[sym] = inst["underlying_key"]   # NSE_EQ|<ISIN>
     idx = {}
     for sym, futs in raw.items():
         futs.sort(key=lambda x: x["expiry"])
         idx[sym] = futs[:3]
-    return idx, lots
+    return idx, lots, cash
 
 def load_underlyings():
     return pd.read_csv(STOCKS_CSV)["underlying_symbol"].dropna().unique().tolist()
@@ -270,7 +271,7 @@ def load_margin_data():
         s = r.get("Symbol")
         if pd.isna(s): continue
         lot = int(r["Lot_Size"]) if pd.notna(r.get("Lot_Size")) else None
-        d[s] = {"Lot_Size": lot, "Margin": safe_float(r.get("Margin")), "Charges": safe_float(r.get("Charges")), "Cost_of_Carry": safe_float(r.get("Cost_of_Carry"))}
+        d[s] = {"Lot_Size": lot, "Margin": safe_float(r.get("Margin")), "Charges": safe_float(r.get("Charges")), "Cost_of_Carry": safe_float(r.get("Cost_of_Carry")), "CF_Charges": safe_float(r.get("CF_Charges"))}
     return d
 
 # ── REST POLL ──
@@ -335,8 +336,13 @@ def build_records(snap):
     for sym in underlyings:
         futs = futures_index.get(sym, []); near = futs[0] if len(futs)>0 else None; nxt = futs[1] if len(futs)>1 else None; far = futs[2] if len(futs)>2 else None
         ns = snap.get(near["instrument_key"], e) if near else e; xs = snap.get(nxt["instrument_key"], e) if nxt else e; fs = snap.get(far["instrument_key"], e) if far else e
-        sp = compute_spreads(ns, xs, fs); m = margin_dict.get(sym, {}); lot = m.get("Lot_Size"); mg = m.get("Margin"); ch = m.get("Charges"); co = m.get("Cost_of_Carry")
+        cs = snap.get(cash_keys.get(sym), e)
+        sp = compute_spreads(ns, xs, fs); m = margin_dict.get(sym, {}); lot = m.get("Lot_Size"); mg = m.get("Margin"); ch = m.get("Charges"); co = m.get("Cost_of_Carry"); cfc = m.get("CF_Charges")
         nLtp, xLtp, fLtp = ns.get("ltp"), xs.get("ltp"), fs.get("ltp")
+        # Cash ↔ Future (buy spot, sell the near future), both legs at LTP like the other
+        # LTP spreads: spread = near fut LTP − spot LTP; % is on the spot LTP.
+        cLtp = cs.get("ltp"); cfs = diff(ns.get("ltp"), cLtp)
+        cfr = round(cfs / cLtp * 100, 2) if (cfs is not None and cLtp) else None
         # LTP spread = later.ltp − earlier.ltp (the mid-ish reference for each pair)
         lsNX, lsXF, lsNF = diff(xLtp, nLtp), diff(fLtp, xLtp), diff(fLtp, nLtp)
         # r* = LTP spread as % of the near LTP. No longer a table column — kept in
@@ -348,7 +354,7 @@ def build_records(snap):
         derived = {"lsNX": lsNX, "rNX": rpct(lsNX), "pNX": pctile(dd.get("nx"), lsNX),
                    "lsXF": lsXF, "rXF": rpct(lsXF), "pXF": pctile(dd.get("xf"), lsXF),
                    "lsNF": lsNF, "rNF": rpct(lsNF), "pNF": pctile(dd.get("nf"), lsNF)}
-        rows.append({"sym": sym, "lot": lot, "mgn": round(mg,2) if mg else None, "chg": round(ch/lot,2) if (ch and lot) else None, "coc": round(co/lot,2) if (co and lot) else None, "nLtp": nLtp, "xLtp": xLtp, "fLtp": fLtp, **sp, **derived})
+        rows.append({"sym": sym, "lot": lot, "mgn": round(mg,2) if mg else None, "chg": round(ch/lot,2) if (ch and lot) else None, "coc": round(co/lot,2) if (co and lot) else None, "cLtp": cLtp, "cfS": cfs, "cfR": cfr, "cfC": round(cfc/lot,2) if (cfc and lot) else None, "nLtp": nLtp, "xLtp": xLtp, "fLtp": fLtp, **sp, **derived})
     return rows
 
 # ── INIT ──
@@ -357,8 +363,10 @@ _raw = load_instruments(); underlyings = load_underlyings(); margin_dict = load_
 spread_history = load_spread_history()
 annotate_cycle_days(spread_history)
 spread_dist = build_spread_dist(spread_history)
-futures_index, lot_sizes = build_futures_index(_raw); del _raw
-subscribe_keys = list(dict.fromkeys([f["instrument_key"] for s in underlyings for f in futures_index.get(s, [])]))
+futures_index, lot_sizes, cash_keys = build_futures_index(_raw); del _raw
+subscribe_keys = list(dict.fromkeys(
+    [f["instrument_key"] for s in underlyings for f in futures_index.get(s, [])]
+    + [cash_keys[s] for s in underlyings if s in cash_keys]))
 print(f"[{datetime.now()}] {len(underlyings)} symbols, {len(subscribe_keys)} contracts")
 
 # ── FLASK ──
