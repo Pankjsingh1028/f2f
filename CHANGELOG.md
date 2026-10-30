@@ -2,6 +2,13 @@
 
 ## 2026-10-30
 
+### Fixed: dashboard blank after the Cash ↔ Fut Charges column
+
+- `/api/spreads` contained a bare `NaN`, which is invalid JSON, so the page failed to load. Cause: NIFTYFPI has a blank
+  `CF_Charges` in `margin_charges_cache.csv` (one of its four charge lookups failed), pandas read it as NaN and
+  `safe_float` let it through. `safe_float` in `f2fspread.py` now returns None for NaN/inf, so any blank cell shows as "—".
+  Checked with a strict JSON parse of the endpoint (passes). Restart `f2fspread.py`; no rebuild needed.
+
 ### Added: Cash ↔ Fut columns (cash buy, near future sell) before Near ↔ Next
 
 - New "Cash ↔ Fut" column group between "Last price" and "Near ↔ Next": **Spread** = near future LTP minus spot (cash)

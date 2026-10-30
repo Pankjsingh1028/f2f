@@ -11,7 +11,7 @@ Run:
   4. python f2fspread.py                 # → http://localhost:8081
 """
 
-import os, sys, json, time, threading, bisect, collections
+import os, sys, json, time, math, threading, bisect, collections
 import pandas as pd
 import requests
 from datetime import datetime, timezone, date
@@ -45,7 +45,11 @@ _state_dirty = True
 _last_cache = None
 
 def safe_float(x):
-    try: return float(x)
+    # NaN/inf (e.g. a blank CSV cell) become None: they are truthy and jsonify would
+    # emit a bare NaN, which is invalid JSON and blanks the whole dashboard.
+    try:
+        v = float(x)
+        return v if math.isfinite(v) else None
     except: return None
 
 def diff(a, b):
