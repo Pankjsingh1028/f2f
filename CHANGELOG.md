@@ -2,16 +2,19 @@
 
 ## 2026-10-30
 
-### Added: Cash ↔ CE (ATM) yield group (buy spot, sell the ATM call)
+### Added: "Cash + CE − PE" synthetic yield group (replaces the short-lived Cash ↔ CE group)
 
-- New group after "Cash ↔ Fut": **Strike** (the call strike nearest the spot LTP), **CE** (that call's LTP) and
-  **Yield %** (CE LTP as a percentage of the spot LTP). Expiry is the near future's expiry (the monthly option).
-- The ATM strike follows the spot, so `f2fspread.py` does not put option strikes on the websocket. A background thread
-  (`start_ce_poller`) picks each symbol's ATM CE every 3 s and fetches those ~219 quotes in one REST batch; the
-  websocket stays at 870 keys. A failed poll is logged and retried after 30 s; the last good values stay until then.
-- Needs a restart of `f2fspread.py`; `static/app.js` is rebuilt. Checked live (read-only quotes): all 219 symbols got
-  a CE, endpoint parses as strict JSON (e.g. ABB 6400 CE at 265.55 on a 6417 spot is 4.14%). Premium moves every
-  3 s, not tick by tick. Not seen in the browser.
+- Buy spot, sell the ATM call, buy a lower put, all on the near future's expiry. The legs are picked from the live spot:
+  CE = strike nearest the spot; target = spot − CE premium; PE = the strike one **below** the PE strike nearest that target.
+- Columns: **CE Strike**, **CE**, **PE Strike**, **PE** (all LTP), **Yield** = CE − PE premium (credit per share),
+  **Yield %** = Yield as a percentage of the spot LTP, and **Floor** = worst-case P&L per share at expiry
+  (Yield − (spot − PE strike), reached when the spot ends at or below the PE strike).
+- Strikes follow the spot, so `f2fspread.py` does not put option strikes on the websocket (still 870 keys). A background
+  thread (`start_options_poller`) refreshes every 3 s with two batched REST calls (ATM CEs, then the PEs they point to).
+  A failed poll is logged and retried after 30 s; the last good values stay until then.
+- Needs a restart of `f2fspread.py`; `static/app.js` is rebuilt. Checked live (read-only quotes): all 219 symbols got both
+  legs, endpoint parses as strict JSON, and ABB/SBIN/RELIANCE strike picks match a hand calculation. Not seen in the browser.
+  Premiums refresh every 3 s, not tick by tick; Yield % and Floor use the live spot against the last polled premiums.
 
 ### Fixed: dashboard blank after the Cash ↔ Fut Charges column
 
